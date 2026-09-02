@@ -1,0 +1,12 @@
+# credenciais reais / material do provedor
+Travel Fusion/
+*.rar
+
+# dependências e build
+node_modules/
+dist/
+.env
+.env.local
+
+# logs
+*.log
