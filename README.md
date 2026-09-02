@@ -17,7 +17,7 @@ indistinguível de qualquer outro provedor por fora.
 ## Rodando
 
 ```bash
-# API — Fastify, porta 3010, Swagger em /docs
+# API — NestJS + TypeScript, porta 3010, Swagger em /docs
 cd api
 npm install
 cp .env.example .env      # preencha TF_PASSWORD
@@ -26,7 +26,9 @@ npm run dev
 # Front — Vite + React + Tailwind + shadcn, porta 5173
 cd web
 npm install
-npm run dev
+npm run dev          # contra o .env
+npm run dev:mock     # mock + API apontada para ele, sem credencial
+npm test             # 18 testes
 ```
 
 ### Sem credencial válida
@@ -79,6 +81,7 @@ depois seja mover pasta, não reescrever.
 
 | | |
 |---|---|
+| Stack | **NestJS + TypeScript**, alinhada com `booking.pass-connect.com` |
 | Implementado | `/availability` (stream), `/quote`, `/booking`, `/retrieve`, `/fare-rules`, `/ping` |
 | **501** por limitação do provedor | assentos, ancillaries avulsos, pagamento, emissão, e-ticket, cancelamento |
 | Falta para o go-live | `ListSupplierRoutes` ligado à busca, 3D Secure |
@@ -88,6 +91,7 @@ já cobra, então `/issue` é 501.
 
 | Documento | Assunto |
 |---|---|
+| [`docs/stack.md`](docs/stack.md) | A stack NestJS/TS e o que ela resolve estruturalmente |
 | [`docs/entrega.md`](docs/entrega.md) | O que foi construído, o que foi além do mínimo e as pendências |
 | [`docs/mapeamento.md`](docs/mapeamento.md) | Rota do contrato ↔ comando Travelfusion, timeouts, mapa de erro |
 | [`docs/arquitetura.md`](docs/arquitetura.md) | As camadas, onde cada decisão mora, o que falta |
