@@ -88,6 +88,7 @@ já cobra, então `/issue` é 501.
 
 | Documento | Assunto |
 |---|---|
+| [`docs/entrega.md`](docs/entrega.md) | O que foi construído, o que foi além do mínimo e as pendências |
 | [`docs/mapeamento.md`](docs/mapeamento.md) | Rota do contrato ↔ comando Travelfusion, timeouts, mapa de erro |
 | [`docs/arquitetura.md`](docs/arquitetura.md) | As camadas, onde cada decisão mora, o que falta |
 | [`docs/decisoes.md`](docs/decisoes.md) | Onde o contrato e o provedor não se encaixam |
