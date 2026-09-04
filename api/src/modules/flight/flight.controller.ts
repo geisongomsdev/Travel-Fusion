@@ -6,14 +6,14 @@ import { Request, Response } from 'express';
 import { Capability, CapabilityGuard } from '../../common/guards/capability.guard';
 import { Operation, RawResponse } from '../../common/interceptors/envelope.interceptor';
 import { notSupported } from '../../common/errors/app-error';
-import { PROVIDER } from '../../config/env';
-import { RequestContext } from '../travelfusion/travelfusion.client';
-import { TravelfusionCommands } from '../travelfusion/travelfusion.commands';
+import { RequestContext } from '../providers/provider.types';
 import { AvailabilityDto } from './dto/availability.dto';
 import { CreateBookingDto, FareRulesDto, QuoteDto, RetrieveDto } from './dto/booking.dto';
+import { PingDto } from './dto/ping.dto';
 import { AvailabilityService } from './use-cases/availability.service';
 import { BookingService } from './use-cases/booking.service';
 import { FareRulesService } from './use-cases/fare-rules.service';
+import { PingService } from './use-cases/ping.service';
 import { QuoteService } from './use-cases/quote.service';
 import { RetrieveService } from './use-cases/retrieve.service';
 import { ERROR_RESPONSES, NOT_SUPPORTED_ROUTES } from './flight.swagger';
@@ -36,7 +36,7 @@ export class FlightController {
     private readonly booking: BookingService,
     private readonly retrieve: RetrieveService,
     private readonly fareRules: FareRulesService,
-    private readonly commands: TravelfusionCommands,
+    private readonly pingProbe: PingService,
   ) {}
 
   @Post('availability')
@@ -180,13 +180,16 @@ export class FlightController {
     description: [
       'Mapeia para `Login`.',
       '',
-      'O `LoginId` fica em cache: ele vale indefinidamente e o `Login` só pode ser',
-      'chamado poucas vezes por dia. Logar por request derruba a conta.',
+      '🔴 Aqui o `Login` é sempre real — servir o `LoginId` do cache responderia',
+      '"ok" sem falar com a companhia. Quem protege o limite diário de `Login` da',
+      'Travelfusion é o teto de **10 tentativas por minuto** do contrato (429).',
+      '',
+      '`verification.scope` é `connection`: o `Login` valida a credencial da',
+      'integração, não as chaves enviadas em `ping.credentials`.',
     ].join('\n'),
   })
-  async ping(@Req() request: FlightRequest) {
-    const loginId = await this.commands.getLoginId(contextOf(request));
-    return { ok: true, provider: PROVIDER, loginId };
+  async ping(@Body() dto: PingDto, @Req() request: FlightRequest) {
+    return this.pingProbe.execute(dto, contextOf(request));
   }
 
   // ── Rotas que existem no contrato e a Travelfusion não atende ───────────────

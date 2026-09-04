@@ -1,10 +1,12 @@
 import { lookupError, ERROR_CODES } from '../src/common/errors/error-codes';
 import { roundMoney, money } from '../src/common/utils/money';
 import { encodeOfferKey, decodeOfferKey } from '../src/common/utils/offer-key';
-import { parseLuggageOptions } from '../src/modules/travelfusion/normalizers/luggage.normalizer';
-import { canonicalCabin } from '../src/modules/travelfusion/normalizers/routing.normalizer';
+import { parseLuggageOptions } from '../src/modules/providers/travelfusion/normalizers/luggage.normalizer';
+import { canonicalCabin } from '../src/modules/providers/travelfusion/normalizers/routing.normalizer';
 import { ageOnFlightDate } from '../src/modules/flight/use-cases/booking.service';
 import { TRAVELFUSION_CAPABILITIES, FLIGHT_OPERATIONS } from '../src/common/capabilities';
+import { buildCommand, parseXml, unwrapCommand } from '../src/common/xml/xml.util';
+import { mapProviderError, readError } from '../src/modules/providers/travelfusion/error.map';
 
 describe('dinheiro', () => {
   it('não erra onde Math.round(v*100)/100 erra', () => {
@@ -117,5 +119,41 @@ describe('capabilities', () => {
 
   it('não promete emissão: o StartBooking já cobra', () => {
     expect(TRAVELFUSION_CAPABILITIES.issue).toBe(false);
+  });
+});
+
+describe('protocolo da Travelfusion', () => {
+  it('envolve todo comando em <CommandList>', () => {
+    // Sem o envelope a Travelfusion recusa com 400 `1-1043`, antes de olhar a
+    // credencial — e o sintoma chega disfarçado de erro de login.
+    const xml = buildCommand('Login', { Username: 'u' });
+    expect(xml).toContain('<CommandList><Login><Username>u</Username></Login></CommandList>');
+  });
+
+  it('desembrulha a resposta pelo nome do comando', async () => {
+    const parsed = await parseXml('<CommandList><Login><LoginId>ABC</LoginId></Login></CommandList>');
+    expect(unwrapCommand(parsed, 'Login')).toEqual({ LoginId: 'ABC' });
+  });
+
+  it('lê o erro em atributo, aninhado, com HTTP 200', async () => {
+    // O formato real de falha: nada de bloco <Error>, e o status é 200.
+    const parsed = await parseXml(
+      '<CommandList><CommandExecutionFailure>' +
+        '<StartRouting ecode="4-3448" etext="Login id not found"/>' +
+        '</CommandExecutionFailure></CommandList>',
+    );
+    expect(readError(parsed)).toEqual({ code: '4-3448', message: 'Login id not found' });
+  });
+
+  it('não inventa erro em resposta limpa', async () => {
+    // <Login millis="115"> tem atributo, mas não é falha.
+    const parsed = await parseXml('<CommandList><Login millis="115"><LoginId>ABC</LoginId></Login></CommandList>');
+    expect(readError(parsed)).toBeNull();
+  });
+
+  it('classifica 4-3448 como recusa de credencial, não como falha técnica', () => {
+    // 401 manda revisar o cadastro; 502 mandaria retentar para sempre.
+    expect(mapProviderError({ code: '4-3448', message: 'Login id not found' }, 'StartRouting').code)
+      .toBe('PROVIDER_AUTHENTICATION_FAILED');
   });
 });

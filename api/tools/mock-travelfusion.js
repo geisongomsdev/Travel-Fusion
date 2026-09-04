@@ -62,12 +62,12 @@ const ROUTES = `
 function respond(command) {
   switch (command) {
     case 'Login':
-      return '<LoginResponse><LoginId>MOCK-LOGIN-ID-123</LoginId></LoginResponse>';
+      return '<Login><LoginId>MOCK-LOGIN-ID-123</LoginId></Login>';
 
     case 'StartRouting':
       state.polls = 0;
       state.delivered = false;
-      return '<StartRoutingResponse><RoutingId>Z1HFJKDF8236723J</RoutingId><RouterList><Router><Name>acme</Name></Router></RouterList></StartRoutingResponse>';
+      return '<StartRouting><RoutingId>Z1HFJKDF8236723J</RoutingId><RouterList><Router><Name>acme</Name></Router></RouterList></StartRouting>';
 
     case 'CheckRouting': {
       state.polls += 1;
@@ -75,11 +75,11 @@ function respond(command) {
       // Entrega as rotas UMA vez só — é assim que o provedor real se comporta.
       const routes = state.delivered ? '' : ROUTES;
       if (!state.delivered) state.delivered = true;
-      return `<CheckRoutingResponse><RouterList><Router><Name>acme</Name><Complete>${complete}</Complete></Router></RouterList><RouteList>${routes}</RouteList></CheckRoutingResponse>`;
+      return `<CheckRouting><RouterList><Router><Name>acme</Name><Complete>${complete}</Complete></Router></RouterList><RouteList>${routes}</RouteList></CheckRouting>`;
     }
 
     case 'ProcessDetails':
-      return `<ProcessDetailsResponse>
+      return `<ProcessDetails>
         <Currency>BRL</Currency>
         <BaseFare>520.00</BaseFare><Tax>75.00</Tax><Fee>30.00</Fee><TotalPrice>625.00</TotalPrice>
         <RequiredParameterList>
@@ -101,23 +101,23 @@ function respond(command) {
    CANCELLATIONS - CHARGE BRL 250.00.</Text>
           </FareRule>
         </FareRuleList>
-      </ProcessDetailsResponse>`;
+      </ProcessDetails>`;
 
     case 'ProcessTerms':
-      return '<ProcessTermsResponse><Status>Ok</Status></ProcessTermsResponse>';
+      return '<ProcessTerms><Status>Ok</Status></ProcessTerms>';
 
     case 'StartBooking':
       state.bookingPolls = 0;
-      return '<StartBookingResponse><BookingId>BK-9001</BookingId></StartBookingResponse>';
+      return '<StartBooking><BookingId>BK-9001</BookingId></StartBooking>';
 
     case 'CheckBooking': {
       state.bookingPolls += 1;
       // Passa por BookingInProgress antes do status final — o caso que o contrato
       // chama de committed sem confirmed.
       if (state.bookingPolls < 2) {
-        return '<CheckBookingResponse><Status>BookingInProgress</Status></CheckBookingResponse>';
+        return '<CheckBooking><Status>BookingInProgress</Status></CheckBooking>';
       }
-      return `<CheckBookingResponse>
+      return `<CheckBooking>
         <Status>Succeeded</Status>
         <SupplierReference>NW6PFQ</SupplierReference>
         <SupplierName>Acme Air</SupplierName>
@@ -135,11 +135,11 @@ function respond(command) {
             <Type>INF</Type>
           </Traveller>
         </TravellerList>
-      </CheckBookingResponse>`;
+      </CheckBooking>`;
     }
 
     default:
-      return `<Error><Code>4-0001</Code><Message>Unknown command ${command}</Message></Error>`;
+      return `<CommandExecutionFailure><${command} ecode="4-0001" etext="Unknown command ${command}"/></CommandExecutionFailure>`;
   }
 }
 
@@ -147,8 +147,20 @@ const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', (chunk) => { body += chunk; });
   req.on('end', () => {
-    const command = body.match(/<([A-Za-z]+)[\s>]/)?.[1] || 'Unknown';
-    const xml = `<?xml version="1.0" encoding="UTF-8"?>${respond(command)}`;
+    /**
+     * 🔴 O mock RECUSA request sem `<CommandList>`, exatamente como a Travelfusion
+     * real (HTTP 400, `1-1043`). Sem isso o mock aceitaria um request que a
+     * produção rejeita — e o bug só apareceria no dia da whitelist.
+     */
+    if (!/<CommandList[\s>]/.test(body)) {
+      res.writeHead(400, { 'Content-Type': 'text/xml; charset=utf-8' });
+      res.end('<CommandList ecode="1-1043" etext="Invalid request:Missing &lt;CommandList&gt; tag"></CommandList>');
+      return;
+    }
+
+    const command = body.replace(/^[\s\S]*?<CommandList[^>]*>/, '').match(/<([A-Za-z]+)[\s>]/)?.[1] || 'Unknown';
+    // A resposta espelha o envelope: erro vai em atributo, não em bloco <Error>.
+    const xml = `<?xml version="1.0" encoding="UTF-8"?><CommandList>${respond(command)}</CommandList>`;
     res.writeHead(200, { 'Content-Type': 'text/xml; charset=utf-8' });
     res.end(xml);
   });

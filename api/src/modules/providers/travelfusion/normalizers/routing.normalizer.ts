@@ -1,10 +1,10 @@
-import { encodeOfferKey } from '../../../common/utils/offer-key';
-import { roundMoney } from '../../../common/utils/money';
-import { PROVIDER } from '../../../config/env';
+import { encodeOfferKey } from '../../../../common/utils/offer-key';
+import { roundMoney } from '../../../../common/utils/money';
+import { PROVIDER } from '../../../../config/env';
 import {
   Airport, Cabin, Fare, FarePrice, FareRulesInfo, FlightTime, Leg, PassengerPrice, Segment,
-} from '../../flight/flight.types';
-import { asList, bool, num, text, XmlNode } from '../xml.util';
+} from '../../../flight/flight.types';
+import { asList, bool, num, text, XmlNode } from '../../../../common/xml/xml.util';
 
 /**
  * Cabine canônica — 01-convencoes.md §6.

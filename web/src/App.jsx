@@ -8,6 +8,7 @@ import { SearchStep } from '@/steps/SearchStep';
 import { ResultsStep } from '@/steps/ResultsStep';
 import { QuoteStep } from '@/steps/QuoteStep';
 import { BookingStep } from '@/steps/BookingStep';
+import { FinalizarStep } from '@/steps/FinalizarStep';
 import { post, streamAvailability } from '@/lib/api';
 
 const STEPS = [
@@ -15,6 +16,7 @@ const STEPS = [
   { key: 'results', label: 'Escolher' },
   { key: 'quote', label: 'Tarifar' },
   { key: 'booking', label: 'Reservar' },
+  { key: 'finalizar', label: 'Finalizar' },
 ];
 
 export default function App() {
@@ -28,6 +30,7 @@ export default function App() {
   const [quote, setQuote] = useState(null);
   const [parameters, setParameters] = useState({});
   const [booking, setBooking] = useState(null);
+  const [finalizar, setFinalizar] = useState(null);
 
   const reset = () => {
     setStep(0);
@@ -37,6 +40,7 @@ export default function App() {
     setQuote(null);
     setParameters({});
     setBooking(null);
+    setFinalizar(null);
     setError(null);
   };
 
@@ -154,6 +158,7 @@ export default function App() {
         )}
         {step === 3 && <BookingStep onBook={handleBook} running={running} booking={booking} />}
 
+        {step === 4 && <FinalizarStep onBook={handleBook} running={running} booking={finalizar} />}
         {step > 0 && (
           <Button variant="ghost" size="sm" onClick={() => setStep((s) => Math.max(0, s - 1))}>
             Voltar

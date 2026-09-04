@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { AppError } from '../../common/errors/app-error';
-import { env } from '../../config/env';
+import { AppError } from '../../../common/errors/app-error';
+import { env } from '../../../config/env';
 import { RequestContext, TravelfusionClient } from './travelfusion.client';
-import { asList, bool, text } from './xml.util';
+import { asList, bool, text } from '../../../common/xml/xml.util';
 
 export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -11,7 +11,11 @@ export const FINAL_BOOKING_STATUSES = new Set(['Succeeded', 'Failed', 'Duplicate
 
 export interface RoutingPoll {
   durationMs: number;
-  routers: Array<{ name: string | null; complete: boolean; error: string | null }>;
+  routers: Array<{
+    name: string | null;
+    complete: boolean;
+    error: string | null;
+  }>;
   complete: boolean;
   routes: Record<string, any>[];
 }
@@ -40,6 +44,23 @@ export class TravelfusionCommands {
    */
   private cachedLoginId: string | null = null;
 
+  /**
+   * 🔴 Cache NEGATIVO do Login. Seis senhas erradas seguidas DESATIVAM o
+   * usuário (Login Handling Guide, pág. 107) — e como `getLoginId` roda em toda
+   * busca, uma credencial errada queima as seis tentativas em seis requests,
+   * sem ninguém perceber. Depois de uma recusa de credencial, paramos de bater
+   * na Travelfusion e devolvemos o mesmo 401 direto.
+   *
+   * A chave é a própria credencial: trocar o `.env` e reiniciar (ou chamar
+   * `clearLoginId`) libera uma nova tentativa. Erro técnico (timeout, 5xx) NÃO
+   * entra aqui — esse continua retentável.
+   */
+  private rejectedCredential: { fingerprint: string; error: AppError } | null = null;
+
+  private static fingerprint(): string {
+    return `${env.travelfusion.xmlLoginId}:${env.travelfusion.password}`;
+  }
+
   constructor(private readonly client: TravelfusionClient) {}
 
   primeLoginId(loginId: string): void {
@@ -48,20 +69,41 @@ export class TravelfusionCommands {
 
   clearLoginId(): void {
     this.cachedLoginId = null;
+    this.rejectedCredential = null;
   }
 
   async getLoginId(context: RequestContext = {}, force = false): Promise<string> {
     if (this.cachedLoginId && !force) return this.cachedLoginId;
 
-    const { parsed } = await this.client.send(
-      'Login',
-      { Username: env.travelfusion.xmlLoginId, Password: env.travelfusion.password },
-      context,
-    );
+    const fingerprint = TravelfusionCommands.fingerprint();
+    if (this.rejectedCredential?.fingerprint === fingerprint) throw this.rejectedCredential.error;
 
-    const loginId = text(parsed?.LoginResponse?.LoginId) ?? text(parsed?.Login?.LoginId);
+    let payload: Record<string, any>;
+    try {
+      ({ payload } = await this.client.send(
+        'Login',
+        {
+          Username: env.travelfusion.xmlLoginId,
+          Password: env.travelfusion.password,
+        },
+        context,
+      ));
+    } catch (error) {
+      // Só credencial recusada vira cache negativo. Falha técnica continua
+      // retentável — senão um 502 passageiro trancaria a API até o restart.
+      if (error instanceof AppError && error.code === 'PROVIDER_AUTHENTICATION_FAILED') {
+        this.rejectedCredential = { fingerprint, error };
+      }
+      throw error;
+    }
+
+    const loginId = text(payload?.LoginId);
     if (!loginId) {
-      throw new AppError('PROVIDER_AUTHENTICATION_FAILED', { metadata: { operation: 'ping' } });
+      const error = new AppError('PROVIDER_AUTHENTICATION_FAILED', {
+        metadata: { operation: 'Login' },
+      });
+      this.rejectedCredential = { fingerprint, error };
+      throw error;
     }
 
     this.cachedLoginId = loginId;
@@ -74,13 +116,16 @@ export class TravelfusionCommands {
    * caso, o mesmo valor.
    */
   private async auth(context: RequestContext): Promise<Record<string, string>> {
-    return { XmlLoginId: env.travelfusion.xmlLoginId, LoginId: await this.getLoginId(context) };
+    return {
+      XmlLoginId: env.travelfusion.xmlLoginId,
+      LoginId: await this.getLoginId(context),
+    };
   }
 
   /** Fornecedores habilitados na nossa branch. */
   async getBranchSupplierList(context: RequestContext): Promise<Array<{ name: string | null; enabled: boolean }>> {
-    const { parsed } = await this.client.send('GetBranchSupplierList', await this.auth(context), context);
-    return asList(parsed?.GetBranchSupplierListResponse?.SupplierList?.Supplier).map((supplier) => ({
+    const { payload } = await this.client.send('GetBranchSupplierList', await this.auth(context), context);
+    return asList(payload?.SupplierList?.Supplier).map((supplier) => ({
       name: text(supplier?.Name),
       enabled: bool(supplier?.Enabled) !== false,
     }));
@@ -96,12 +141,12 @@ export class TravelfusionCommands {
     supplier: string,
     context: RequestContext,
   ): Promise<Array<{ origin: string | null; destination: string | null }>> {
-    const { parsed } = await this.client.send(
+    const { payload } = await this.client.send(
       'ListSupplierRoutes',
       { ...(await this.auth(context)), Mode: 'plane', SupplierName: supplier },
       context,
     );
-    return asList(parsed?.ListSupplierRoutesResponse?.RouteList?.Route).map((route) => ({
+    return asList(payload?.RouteList?.Route).map((route) => ({
       origin: text(route?.Origin),
       destination: text(route?.Destination),
     }));
@@ -111,8 +156,12 @@ export class TravelfusionCommands {
     request: Record<string, unknown>,
     context: RequestContext,
   ): Promise<{ routingId: string | null; routers: string[] }> {
-    const { parsed } = await this.client.send('StartRouting', { ...(await this.auth(context)), ...request }, context);
-    const response = parsed?.StartRoutingResponse ?? {};
+    const { payload: response } = await this.client.send(
+      'StartRouting',
+      { ...(await this.auth(context)), ...request },
+      context,
+    );
+
     return {
       routingId: text(response.RoutingId),
       routers: asList(response.RouterList?.Router)
@@ -128,13 +177,12 @@ export class TravelfusionCommands {
    * acumula; tratar cada resposta como "o total" perde voo.
    */
   async checkRouting(routingId: string, context: RequestContext): Promise<RoutingPoll> {
-    const { parsed, durationMs } = await this.client.send(
+    const { payload: response, durationMs } = await this.client.send(
       'CheckRouting',
       { ...(await this.auth(context)), RoutingId: routingId },
       context,
     );
 
-    const response = parsed?.CheckRoutingResponse ?? {};
     const routers = asList(response.RouterList?.Router).map((router: any) => ({
       name: text(router?.Name),
       complete: bool(router?.Complete) === true,
@@ -155,7 +203,7 @@ export class TravelfusionCommands {
     returnId: string | null | undefined,
     context: RequestContext,
   ): Promise<{ response: Record<string, any>; durationMs: number }> {
-    const { parsed, durationMs } = await this.client.send(
+    const { payload: response, durationMs } = await this.client.send(
       'ProcessDetails',
       {
         ...(await this.auth(context)),
@@ -166,7 +214,7 @@ export class TravelfusionCommands {
       },
       context,
     );
-    return { response: parsed?.ProcessDetailsResponse ?? {}, durationMs };
+    return { response, durationMs };
   }
 
   /**
@@ -174,35 +222,34 @@ export class TravelfusionCommands {
    * erro de validação de dados — a Travelfusion audita a contagem.
    */
   async processTerms(
-    payload: Record<string, unknown>,
+    request: Record<string, unknown>,
     context: RequestContext,
   ): Promise<{ response: Record<string, any>; durationMs: number }> {
-    const { parsed, durationMs } = await this.client.send(
+    const { payload: response, durationMs } = await this.client.send(
       'ProcessTerms',
-      { ...(await this.auth(context)), ...payload },
+      { ...(await this.auth(context)), ...request },
       context,
     );
-    return { response: parsed?.ProcessTermsResponse ?? {}, durationMs };
+    return { response, durationMs };
   }
 
   /** Sem retry. Se falhar, o caminho é CheckBooking — nunca repetir. */
   async startBooking(routingId: string, context: RequestContext): Promise<{ bookingId: string }> {
-    const { parsed } = await this.client.send(
+    const { payload } = await this.client.send(
       'StartBooking',
       { ...(await this.auth(context)), Mode: 'plane', RoutingId: routingId },
       context,
     );
-    return { bookingId: text(parsed?.StartBookingResponse?.BookingId) ?? routingId };
+    return { bookingId: text(payload?.BookingId) ?? routingId };
   }
 
   async checkBooking(routingId: string, context: RequestContext): Promise<BookingPoll> {
-    const { parsed, durationMs } = await this.client.send(
+    const { payload: response, durationMs } = await this.client.send(
       'CheckBooking',
       { ...(await this.auth(context)), Mode: 'plane', RoutingId: routingId },
       context,
     );
 
-    const response = parsed?.CheckBookingResponse ?? {};
     const status = text(response.Status) ?? text(response.BookingStatus);
 
     return {

@@ -4,7 +4,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { Observable, map } from 'rxjs';
-import { PROVIDER } from '../../config/env';
+import { env } from '../../config/env';
 
 export const RAW_RESPONSE_KEY = 'flight:rawResponse';
 
@@ -50,7 +50,13 @@ export class EnvelopeInterceptor implements NestInterceptor {
         success: true,
         data,
         meta: {
-          provider: PROVIDER,
+          /**
+           * 🔴 O provedor do meta é o que ATENDEU, não uma constante: a resposta
+           * já diz de quem veio (o caso de uso devolve `provider`), e publicar
+           * um nome fixo faria um /quote da LATAM se anunciar como Travelfusion.
+           * Sem essa informação no corpo, cai no padrão da instância.
+           */
+          provider: (data as { provider?: string } | null)?.provider ?? env.providers[0] ?? null,
           duration: Date.now() - startedAt,
           timestamp: new Date().toISOString(),
           ...(operation ? { operation } : {}),

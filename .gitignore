@@ -10,3 +10,11 @@ dist/
 
 # logs
 *.log
+9+39
+# Pacotes de suporte com credencial viva (LoginId, logs XML de sessão real).
+# Existem para ir por e-mail ao provedor, não para o histórico do repositório.
+docs/suporte/**/envio-com-credenciais/
+
+# Documentação extraída do portal da LATAM — material do provedor, mesma regra
+# aplicada a `Travel Fusion/`. Os testes que a usam pulam sozinhos se ausente.
+docs-api/latam/

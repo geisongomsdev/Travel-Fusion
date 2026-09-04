@@ -1,23 +1,35 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios, { AxiosInstance } from 'axios';
-import { AppError } from '../../common/errors/app-error';
-import { env } from '../../config/env';
-import { assertCredentialsConfigured } from '../../config/credentials';
-import { CONNECT_TIMEOUT_MS, timeoutFor } from '../../config/timeouts';
+import { AppError } from '../../../common/errors/app-error';
+import { env } from '../../../config/env';
+import { assertCredentialsConfigured } from '../../../config/credentials';
+import { CONNECT_TIMEOUT_MS, timeoutFor } from '../../../config/timeouts';
+import { RequestContext } from '../provider.types';
 import { buildProviderError, mapProviderError, readError } from './error.map';
-import { buildCommand, parseXml } from './xml.util';
+import { buildCommand, parseXml, unwrapCommand } from '../../../common/xml/xml.util';
 
-export interface RequestContext {
-  correlationId?: string;
-  endUserIp?: string;
-  endUserAgent?: string;
-  pointOfSale?: string;
-}
+/**
+ * 🔴 O contexto agora e da FRONTEIRA de provedor, nao da Travelfusion: os dois
+ * provedores propagam correlationId e ponto de venda. Reexportado daqui so para
+ * nao quebrar quem ja importava.
+ */
+export type { RequestContext };
 
 export interface CommandResult {
+  /** Documento inteiro, `<CommandList>` incluído. */
   parsed: Record<string, any>;
+  /** Nó do comando, já desembrulhado — é o que os casos de uso consomem. */
+  payload: Record<string, any>;
   durationMs: number;
 }
+
+/** Corpo cru virando mensagem: sem quebra de linha e com teto de tamanho. */
+const snippet = (body: unknown, max = 500): string | null => {
+  if (typeof body !== 'string') return null;
+  const flat = body.replace(/\s+/g, ' ').trim();
+  if (flat === '') return null;
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+};
 
 const isTimeout = (error: unknown): boolean => {
   const code = (error as { code?: string })?.code;
@@ -38,6 +50,12 @@ export class TravelfusionClient {
     headers: { 'Content-Type': 'text/xml; charset=utf-8', 'Accept-Encoding': 'gzip' },
     responseType: 'text',
     transitional: { clarifyTimeoutError: true },
+    // 🔴 A Travelfusion devolve o bloco <Error> COM status 4xx. Deixar o axios
+    // rejeitar por status descartaria o corpo, e o erro real (ex.: `4-3448
+    // Login ID not found`) viraria "Request failed with status code 400" — que
+    // não diz nada a quem consome e ainda cai como falha de rede retentável.
+    // Aceitamos qualquer status e decidimos abaixo, olhando o XML.
+    validateStatus: () => true,
   });
 
   /**
@@ -76,12 +94,26 @@ export class TravelfusionClient {
 
       try {
         const response = await this.http.post<string>('', payload, { timeout });
-        const parsed = await parseXml(response.data);
+        const parsed = await parseXml(response.data).catch(() => null);
 
-        const fault = readError(parsed);
+        const fault = parsed ? readError(parsed) : null;
         if (fault) throw mapProviderError(fault, command, response.status);
 
-        return { parsed, durationMs: Date.now() - startedAt };
+        // Status de erro sem <Error> legível: não há o que normalizar, mas o
+        // corpo cru é a única pista — vai truncado no providerMessage.
+        if (response.status < 200 || response.status >= 300) {
+          throw mapProviderError({ code: `HTTP_`, message: snippet(response.data) }, command, response.status);
+        }
+
+        if (!parsed) {
+          throw mapProviderError({ code: 'INVALID_XML', message: snippet(response.data) }, command, response.status);
+        }
+
+        return {
+          parsed,
+          payload: unwrapCommand(parsed, command),
+          durationMs: Date.now() - startedAt,
+        };
       } catch (error) {
         // Erro de negócio do provedor não retenta: a resposta chegou e é final.
         if (error instanceof AppError) throw error;
@@ -90,7 +122,11 @@ export class TravelfusionClient {
       }
     }
 
-    this.logger.error({ command, correlationId: context.correlationId, err: lastError });
+    this.logger.error({
+      command,
+      correlationId: context.correlationId,
+      err: lastError,
+    });
 
     const providerError = buildProviderError({
       operation: command,

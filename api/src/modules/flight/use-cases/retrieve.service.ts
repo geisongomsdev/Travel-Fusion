@@ -1,20 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { AppError } from '../../../common/errors/app-error';
-import { PROVIDER } from '../../../config/env';
-import { RequestContext } from '../../travelfusion/travelfusion.client';
-import { TravelfusionCommands } from '../../travelfusion/travelfusion.commands';
-import { asList, text } from '../../travelfusion/xml.util';
+import { ProviderRegistry } from '../../providers/provider.registry';
+import { ProviderRetrieval, RequestContext } from '../../providers/provider.types';
 import { RetrieveDto } from '../dto/booking.dto';
-
-/** Estado de VENDA da reserva — vocabulário canônico, não o do fornecedor. */
-const STATUS_MAP: Record<string, 'confirmed' | 'pending' | 'cancelled'> = {
-  Succeeded: 'confirmed',
-  BookingInProgress: 'pending',
-  Unconfirmed: 'pending',
-  UnconfirmedBySupplier: 'pending',
-  Cancelled: 'cancelled',
-  Failed: 'cancelled',
-};
 
 /**
  * 🔴 O vocabulário de tipo de passageiro varia muito entre companhias. O que não
@@ -34,34 +22,38 @@ export interface RetrieveResult {
 
 @Injectable()
 export class RetrieveService {
-  constructor(private readonly commands: TravelfusionCommands) {}
+  constructor(private readonly registry: ProviderRegistry) {}
 
   /**
    * Consultar a reserva ao vivo — SEM cache. O ponto da rota é saber o estado
    * agora: é a leitura independente que prova o efeito das mutações.
    *
-   * A Travelfusion não tem um GetBooking rico. Todas as chaves do contrato
-   * existem mesmo assim, com `null` onde ela não informa — omitir chave
-   * significaria outra coisa para quem consome.
+   * 🔴 O envelope do contrato é montado AQUI, um lugar só, e não em cada
+   * provedor: todas as chaves existem sempre, com `null` onde a companhia não
+   * informa. Omitir chave significaria outra coisa para quem consome, e deixar
+   * isso a cargo de cada provedor faria as duas respostas divergirem em silêncio.
    */
   async execute(dto: RetrieveDto, context: RequestContext = {}): Promise<RetrieveResult> {
-    const locator = dto.booking.locator;
-    const result = await this.commands.checkBooking(locator, context);
+    // Sem chave de oferta para dizer de quem é a reserva, quem manda é
+    // `options.provider`; sem ele, o padrão da instância.
+    const provider = dto.options?.provider
+      ? this.registry.get(dto.options.provider)
+      : this.registry.default();
 
-    if (!result.status) {
-      throw new AppError('RESOURCE_NOT_FOUND', { metadata: { operation: 'retrieve' } });
+    if (!provider.supports.retrieve) {
+      throw new AppError('CAPABILITY_NOT_SUPPORTED', { metadata: { operation: 'retrieve' } });
     }
 
-    const raw = result.raw;
+    const found = await provider.retrieve(dto.booking.locator, context);
 
     return {
-      locator,
-      connector: dto.options?.provider ?? PROVIDER,
+      locator: found.locator,
+      connector: provider.name,
       data: {
-        status: STATUS_MAP[result.status] ?? null,
+        status: found.status,
         type: 'flight',
-        // O CheckBooking não devolve os trechos, então o tipo de viagem não é
-        // derivável aqui. `null` é a resposta honesta — não um palpite.
+        // Nenhum dos dois provedores devolve os trechos nesta leitura, então o
+        // tipo de viagem não é derivável aqui. `null` é a resposta honesta.
         trip: null,
         grouping: null,
         title: null,
@@ -69,46 +61,45 @@ export class RetrieveService {
         iata: null,
         departure: null,
         arrival: null,
-        currency: text(raw.Currency),
+        currency: found.currency,
 
-        createdAt: text(raw.BookingDateTime),
-        // Prazo da reserva em espera: depois disso a companhia cancela sozinha.
-        expiresAt: text(raw.TimeLimit),
-        confirmationAt: text(raw.ConfirmationDateTime) ?? text(raw.BookingDateTime),
+        createdAt: found.createdAt,
+        expiresAt: found.expiresAt,
+        confirmationAt: found.confirmationAt,
 
         provider: {
-          code: PROVIDER,
+          code: provider.name,
           // ⚠️ É o nome da COMPANHIA AÉREA, não o do provedor. O campo engana.
-          name: text(raw.SupplierName),
-          locator,
+          name: found.supplierName,
+          locator: found.locator,
         },
-        // Num agregador o localizador da companhia difere do do provedor, e é o
-        // da companhia que o passageiro precisa no check-in.
-        supplier: { confirmation: result.supplierReference },
+        supplier: { confirmation: found.supplierConfirmation },
 
-        people: this.normalizePeople(raw),
+        people: this.normalizePeople(found.people),
         segments: null,
         itinerary: null,
       },
     };
   }
 
-  private normalizePeople(raw: Record<string, any>): Record<string, unknown>[] {
-    return asList(raw?.TravellerList?.Traveller).map((traveller: any, index: number) => {
-      const birthdate = this.normalizeBirthdate(text(traveller?.DateOfBirth));
-      const type = PASSENGER_TYPE_MAP[(text(traveller?.Type) ?? '').toUpperCase()] ?? null;
+  private normalizePeople(people: ProviderRetrieval['people']): Record<string, unknown>[] {
+    return people.map((person, index) => {
+      const birthdate = this.normalizeBirthdate((person.dateOfBirth as string) ?? null);
+      const type = PASSENGER_TYPE_MAP[String(person.type ?? '').toUpperCase()] ?? null;
+      const firstName = (person.firstName as string) ?? null;
+      const lastName = (person.lastName as string) ?? null;
 
       return {
         // 🔴 Bebê de colo vira entrada PRÓPRIA, com main:false e email null —
         // as companhias costumam devolvê-lo aninhado no adulto acompanhante.
         main: index === 0 && type !== 'infant',
-        name: [text(traveller?.FirstName), text(traveller?.LastName)].filter(Boolean).join(' ') || null,
-        firstName: text(traveller?.FirstName),
-        lastName: text(traveller?.LastName),
-        email: type === 'infant' ? null : text(traveller?.Email),
+        name: [firstName, lastName].filter(Boolean).join(' ') || null,
+        firstName,
+        lastName,
+        email: type === 'infant' ? null : ((person.email as string) ?? null),
         phone: { country: null, area: null, number: null, type: null },
-        nationality: text(traveller?.Nationality),
-        document: { type: null, number: text(traveller?.DocumentNumber) },
+        nationality: (person.nationality as string) ?? null,
+        document: { type: null, number: (person.documentNumber as string) ?? null },
         birthdate,
         age: this.ageFrom(birthdate),
         type,

@@ -1,21 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { AppError } from '../../../common/errors/app-error';
 import { decodeOfferKey } from '../../../common/utils/offer-key';
-import { PROVIDER } from '../../../config/env';
-import { RequestContext } from '../../travelfusion/travelfusion.client';
-import { TravelfusionCommands } from '../../travelfusion/travelfusion.commands';
-import { asList, text } from '../../travelfusion/xml.util';
+import { ProviderRegistry } from '../../providers/provider.registry';
+import { FareRuleSection, RequestContext } from '../../providers/provider.types';
 import { FareRulesDto } from '../dto/booking.dto';
 
-/** As 5 chaves existem sempre, na mesma ordem. Ausência é `null`, nunca `""`. */
-export interface FareRuleSection {
-  company: string | null;
-  fareBasis: string | null;
-  origin: string | null;
-  destination: string | null;
-  /** O texto da companhia, com `\n` preservado. Nunca null, nunca vazio. */
-  text: string;
-}
+export type { FareRuleSection };
 
 export interface FareRulesResult {
   provider: string;
@@ -24,7 +14,7 @@ export interface FareRulesResult {
 
 @Injectable()
 export class FareRulesService {
-  constructor(private readonly commands: TravelfusionCommands) {}
+  constructor(private readonly registry: ProviderRegistry) {}
 
   /**
    * Texto integral das condições da tarifa. Read-only: não tarifa, não reserva.
@@ -40,8 +30,16 @@ export class FareRulesService {
       });
     }
 
-    const { response } = await this.commands.processDetails(key.r, key.o, null, context);
-    const sections = this.buildSections(response);
+    const provider = this.registry.get(key.p);
+
+    // 🔴 Provedor que não expõe o texto responde 501 ANTES de sair para a rede.
+    // A LATAM devolve penalidade estruturada, não o texto da tarifa — inventar
+    // uma seção a partir disso seria publicar como condição algo que não é.
+    if (!provider.supports.fareRules) {
+      throw new AppError('CAPABILITY_NOT_SUPPORTED', { metadata: { operation: 'fareRules' } });
+    }
+
+    const sections = await provider.fareRules(key, dto, context);
 
     if (sections.length === 0) {
       // sections[] tem mínimo 1 e o texto nunca é vazio. Sem texto, a resposta
@@ -49,37 +47,6 @@ export class FareRulesService {
       throw new AppError('CAPABILITY_NOT_SUPPORTED', { metadata: { operation: 'fareRules' } });
     }
 
-    return { provider: PROVIDER, sections };
-  }
-
-  private buildSections(response: Record<string, any>): FareRuleSection[] {
-    const candidates = [
-      ...asList(response?.FareRuleList?.FareRule),
-      ...asList(response?.TermsAndConditionsList?.TermsAndConditions),
-    ];
-
-    const sections = candidates
-      .map((node: any) => ({
-        company: text(node?.Carrier) ?? text(node?.SupplierName),
-        fareBasis: text(node?.FareBasis),
-        origin: text(node?.Origin),
-        destination: text(node?.Destination),
-        text: text(node?.Text) ?? text(node?.Description) ?? text(node),
-      }))
-      .filter((section): section is FareRuleSection => Boolean(section.text));
-
-    if (sections.length > 0) return sections;
-
-    // Fallback: alguns fornecedores mandam um bloco único, sem lista.
-    const single = text(response?.TermsAndConditions) ?? text(response?.FareRules);
-    return single
-      ? [{
-          company: text(response?.SupplierName),
-          fareBasis: text(response?.FareBasis),
-          origin: text(response?.Origin),
-          destination: text(response?.Destination),
-          text: single,
-        }]
-      : [];
+    return { provider: provider.name, sections };
   }
 }

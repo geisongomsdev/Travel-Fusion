@@ -1,7 +1,7 @@
-import { AppError, ProviderErrorWindow } from '../../common/errors/app-error';
-import { ErrorCode } from '../../common/errors/error-codes';
-import { PROVIDER } from '../../config/env';
-import { text } from './xml.util';
+import { AppError, ProviderErrorWindow } from '../../../common/errors/app-error';
+import { ErrorCode } from '../../../common/errors/error-codes';
+import { PROVIDER } from '../../../config/env';
+import { text } from '../../../common/xml/xml.util';
 
 /**
  * Erros da Travelfusion → catálogo do contrato.
@@ -42,10 +42,48 @@ export function buildProviderError(input: {
   };
 }
 
-/** Lê o bloco <Error> de qualquer resposta. `null` quando a resposta está limpa. */
+/**
+ * 🔴 A Travelfusion sinaliza falha por ATRIBUTO — `ecode`/`etext` — e não por um
+ * bloco `<Error>`. Além disso ela responde HTTP 200 nesses casos, e o atributo
+ * vem aninhado:
+ *
+ *   <CommandList><CommandExecutionFailure>
+ *     <StartRouting ecode="4-3448" etext="Login id not found"/>
+ *   </CommandExecutionFailure></CommandList>
+ *
+ * Procurar só na raiz faz a resposta de erro passar por resposta vazia, e o
+ * sintoma vira "nenhum voo encontrado" no lugar da causa real.
+ */
+const readAttrs = (node: unknown): ProviderFault | null => {
+  const attrs = (node as { $?: Record<string, string> } | undefined)?.$;
+  if (!attrs?.ecode && !attrs?.etext) return null;
+  return { code: attrs.ecode ?? null, message: attrs.etext ?? null };
+};
+
+/** Primeiro filho que carrega `ecode`/`etext`. Um nível só, de propósito. */
+const readChildren = (node: unknown): ProviderFault | null => {
+  if (!node || typeof node !== 'object') return null;
+  for (const child of Object.values(node as Record<string, unknown>)) {
+    for (const item of Array.isArray(child) ? child : [child]) {
+      const found = readAttrs(item);
+      if (found) return found;
+    }
+  }
+  return null;
+};
+
+/** Lê o erro de qualquer resposta. `null` quando a resposta está limpa. */
 export function readError(parsed: Record<string, any>): ProviderFault | null {
   const root = parsed && (Object.values(parsed)[0] as Record<string, any> | undefined);
-  const node = root?.Error ?? root?.ErrorList?.Error;
+  if (!root || typeof root !== 'object') return null;
+
+  // Nada de varredura profunda: uma resposta de CheckRouting traz centenas de
+  // rotas, e olhamos exatamente os lugares que a spec define.
+  const fromAttrs = readAttrs(root) ?? readChildren(root.CommandExecutionFailure) ?? readChildren(root);
+  if (fromAttrs) return fromAttrs;
+
+  // Formato `<Error>`: mantido porque parte da spec documenta assim.
+  const node = root.Error ?? root.ErrorList?.Error;
   if (!node) return null;
   const first = Array.isArray(node) ? node[0] : node;
   return {
