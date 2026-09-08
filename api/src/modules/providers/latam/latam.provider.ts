@@ -11,7 +11,7 @@ import {
   ProviderRetrieval, RequestContext,
 } from '../provider.types';
 import { asList, attr, child, num, text, XmlValue } from '../../../common/xml/xml.util';
-import { LatamCommands } from './latam.commands';
+import { buildPaxList, LatamCommands } from './latam.commands';
 import { normalizeAirShopping } from './normalizers/offer.normalizer';
 
 /**
@@ -62,29 +62,28 @@ export class LatamProvider implements FlightProvider {
    * de uso tratar os dois provedores sem saber qual é qual.
    */
   async *search(request: AvailabilityDto, context: RequestContext): AsyncGenerator<ProviderOffer[]> {
+    const passengers = {
+      adults: request.passengers.adults,
+      children: request.passengers.children ?? 0,
+      babies: request.passengers.babies ?? 0,
+    };
+
     const { payload } = await this.commands.airShopping(
-      {
-        legs: request.legs,
-        passengers: {
-          adults: request.passengers.adults,
-          children: request.passengers.children ?? 0,
-          babies: request.passengers.babies ?? 0,
-        },
-        cabin: request.options?.class ?? null,
-      },
+      { legs: request.legs, passengers, cabin: request.options?.class ?? null },
       context,
     );
 
-    const passengerCount = Math.max(
-      1,
-      request.passengers.adults + (request.passengers.children ?? 0) + (request.passengers.babies ?? 0),
-    );
+    const passengerCount = Math.max(1, passengers.adults + passengers.children + passengers.babies);
 
-    yield normalizeAirShopping(payload, passengerCount);
+    // A MESMA lista de PaxIDs que foi para o AirShopping entra na chave de cada
+    // oferta: o OfferPrice exige recebê-la de volta, e o /quote só tem a chave.
+    const paxIds = buildPaxList(passengers).map((pax) => pax.PaxID);
+
+    yield normalizeAirShopping(payload, passengerCount, paxIds);
   }
 
   async quote(key: OfferKey, dto: QuoteDto, context: RequestContext): Promise<ProviderQuote> {
-    const { payload } = await this.commands.offerPrice(key.r, key.i ?? null, context);
+    const { payload } = await this.commands.offerPrice(key.r, key.i ?? null, key.x ?? [], context);
 
     const offer = asList(child(payload, 'PricedOffer', 'Offer'))[0]
       ?? asList(child(payload, 'OffersGroup', 'CarrierOffers', 'Offer'))[0]
@@ -131,22 +130,54 @@ export class LatamProvider implements FlightProvider {
     const referenceDate = dto.referenceDate ?? new Date().toISOString();
     const counters: Record<string, number> = { ADT: 0, CHD: 0, INF: 0 };
 
+    /**
+     * 🔴 A ORDEM dos elementos é do XSD, não estética: `ContactInfoRefID`,
+     * `IdentityDoc`, `Individual`, `PaxID`, `PTC` — e dentro do Individual,
+     * `Birthdate` antes do nome. Fora dessa sequência a LATAM devolve
+     * `cvc-complex-type.2.4.a` sem dizer qual campo está no lugar errado.
+     */
     const paxList = dto.passengers.map((passenger) => {
       const ptc = passengerTypeCode(passenger.dateOfBirth, referenceDate);
       counters[ptc] += 1;
+      const paxId = `${ptc}_${counters[ptc]}`;
+      const document = passenger.customParameters?.documentNumber;
+
       return {
-        PaxID: `${ptc}_${counters[ptc]}`,
-        PTC: ptc,
-        Birthdate: passenger.dateOfBirth,
+        ContactInfoRefID: `${paxId}_CNT`,
+        IdentityDoc: document
+          ? { IdentityDocID: document, IdentityDocTypeCode: 'P' }
+          : undefined,
         Individual: {
+          Birthdate: passenger.dateOfBirth,
           GivenName: passenger.firstName,
+          // Chave `IndividualIDKey` do XSD: sem ela a ordem é recusada.
+          IndividualID: `IND_${paxId}`,
           Surname: passenger.lastName,
-          TitleName: passenger.title ?? 'MR',
         },
+        PaxID: paxId,
+        PTC: ptc,
       };
     });
 
-    const { payload } = await this.commands.orderCreate(key.r, key.i ?? null, paxList, context);
+    /**
+     * E-mail e telefone são CSPs do nível da RESERVA (o /quote os declara com
+     * `perPassenger: false`), mas a NDC quer um ContactInfo por passageiro —
+     * então o mesmo contato é replicado, um por PaxID.
+     */
+    const email = dto.customParameters?.email;
+    const phone = dto.customParameters?.phone;
+
+    const contacts = email || phone
+      ? paxList.map((pax) => ({
+        ContactInfoID: `${pax.PaxID}_CNT`,
+        EmailAddress: email ? { EmailAddressText: email } : undefined,
+        Phone: phone
+          ? { ContactTypeText: 'MOBILE', PhoneNumber: phone.replace(/\D/g, '') }
+          : undefined,
+      }))
+      : [];
+
+    const { payload } = await this.commands.orderCreate(key.r, key.i ?? null, paxList, contacts, context);
     return this.readOrder(payload, 'createBooking');
   }
 

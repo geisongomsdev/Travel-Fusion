@@ -12,6 +12,9 @@ export interface OfferKey {
   o?: string | null;
   i?: string | null;
   d?: string | null;
+  /** PaxIDs da busca (ADT_1, CHD_1…). O OfferPrice exige a PaxList de volta e
+   * o QuoteDto só carrega o identifier — então ela viaja aqui. */
+  x?: string[] | null;
   k?: string | null;
 }
 

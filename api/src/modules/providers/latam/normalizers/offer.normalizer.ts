@@ -305,6 +305,7 @@ function buildLeg(
   offerId: string,
   journeyId: string | null,
   offerItemId: string | null,
+  paxIds: string[],
   direction: 'outward' | 'return',
 ): Leg {
   const first = segments[0];
@@ -314,7 +315,7 @@ function buildLeg(
   return {
     // `i` carrega o OfferItemID: o OfferPrice exige OfferRefID + OfferItemRefID,
     // e sem ele a chave não conseguiria tarifar a própria oferta que representa.
-    identifier: encodeOfferKey({ p: LATAM, r: offerId, o: journeyId, i: offerItemId, d: direction }),
+    identifier: encodeOfferKey({ p: LATAM, r: offerId, o: journeyId, i: offerItemId, d: direction, x: paxIds }),
     company: { code: first?.company.code ?? null, name: first?.company.name ?? null },
     origin: first?.origin ?? null,
     destination: last?.destination ?? null,
@@ -340,6 +341,7 @@ export function normalizeOffer(
   offer: XmlValue,
   dataLists: XmlValue,
   passengerCount: number,
+  paxIds: string[],
 ): ProviderOffer | null {
   const offerId = text(child(offer, 'OfferID'));
   if (!offerId) return null;
@@ -375,7 +377,7 @@ export function normalizeOffer(
     if (segments.length === 0) return null;
 
     const fare = normalizeFare(offer, passengerCount, offerId, journeyId, priceClasses, baggageIndex);
-    return buildLeg(segments, fare, offerId, journeyId, fare.fareId, direction);
+    return buildLeg(segments, fare, offerId, journeyId, fare.fareId, paxIds, direction);
   };
 
   const outbound = legFor(journeyIds[0], 'outward');
@@ -385,7 +387,7 @@ export function normalizeOffer(
 }
 
 /** Todas as ofertas de um `IATA_AirShoppingRS` já normalizadas. */
-export function normalizeAirShopping(payload: XmlValue, passengerCount: number): ProviderOffer[] {
+export function normalizeAirShopping(payload: XmlValue, passengerCount: number, paxIds: string[]): ProviderOffer[] {
   const dataLists = child(payload, 'DataLists');
 
   const offers = [
@@ -395,6 +397,6 @@ export function normalizeAirShopping(payload: XmlValue, passengerCount: number):
   ];
 
   return offers
-    .map((offer) => normalizeOffer(offer, dataLists, passengerCount))
+    .map((offer) => normalizeOffer(offer, dataLists, passengerCount, paxIds))
     .filter((offer): offer is ProviderOffer => offer !== null);
 }

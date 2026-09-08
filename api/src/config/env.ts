@@ -35,7 +35,7 @@ export const env = {
 
   latam: {
     /** Apigee sandbox. Produção troca só isto e as credenciais. */
-    endpoint: process.env.LATAM_ENDPOINT ?? 'https://sandbox.api.latam.com/api/ndc/v192',
+    endpoint: process.env.LATAM_ENDPOINT ?? 'https://sandbox.api.latam.com',
     tokenEndpoint: process.env.LATAM_TOKEN_ENDPOINT ?? 'https://sandbox.api.latam.com/oauth/cc/token',
     apiKey: process.env.LATAM_API_KEY ?? '',
     apiSecret: process.env.LATAM_API_SECRET ?? '',
@@ -49,6 +49,11 @@ export const env = {
     agencyId: process.env.LATAM_AGENCY_ID ?? '',
     agencyIata: process.env.LATAM_AGENCY_IATA ?? '',
     agencyName: process.env.LATAM_AGENCY_NAME ?? 'Pass',
+    /**
+     * 🔴 Sem TravelAgent/TravelAgentID a LATAM devolve 403122009 "Missing Agent
+     * Info" antes de olhar o itinerario. E o e-mail cadastrado da agencia.
+     */
+    travelAgentId: process.env.LATAM_TRAVEL_AGENT_ID ?? '',
     /**
      * O token vive 59 min. Renovamos antes para não perder uma busca por um
      * token que expirou entre o cabeçalho e a resposta.

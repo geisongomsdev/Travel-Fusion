@@ -6,15 +6,23 @@ import { LatamClient, LatamResult } from './latam.client';
 
 const NS = 'http://www.iata.org/IATA/2015/00/2019.2';
 
-/** Caminhos do Apigee. Só `/airshopping`, `/order/*` e as listas estão no YAML;
- * o OfferPrice é documentado à parte, por isso vem de env — assim uma mudança de
- * rota não exige recompilar. */
+/** Dono da oferta. Sempre LA: este provedor é a LATAM. */
+const OWNER_CODE = 'LA';
+
+/**
+ * Caminhos do Apigee, conferidos um a um contra o sandbox.
+ *
+ * 🔴 `offerPrice` é o único em camelCase: `/ndc/v192/offerprice` responde
+ * `404 Invalid url or Method Not Allowed`. O YAML publicado não lista essa
+ * rota — descobri o casing sondando o gateway — e é por isso que todas
+ * continuam sobreponíveis por env, sem recompilar.
+ */
 export const PATHS = {
-  airShopping: process.env.LATAM_PATH_AIRSHOPPING ?? '/airshopping',
-  offerPrice: process.env.LATAM_PATH_OFFERPRICE ?? '/offerprice',
-  orderCreate: process.env.LATAM_PATH_ORDER_CREATE ?? '/order/create',
-  orderRetrieve: process.env.LATAM_PATH_ORDER_RETRIEVE ?? '/order/retrieve',
-  orderCancel: process.env.LATAM_PATH_ORDER_CANCEL ?? '/order/cancel',
+  airShopping: process.env.LATAM_PATH_AIRSHOPPING ?? '/ndc/v192/airshopping',
+  offerPrice: process.env.LATAM_PATH_OFFERPRICE ?? '/ndc/v192/offerPrice',
+  orderCreate: process.env.LATAM_PATH_ORDER_CREATE ?? '/ndc/v192/order/create',
+  orderRetrieve: process.env.LATAM_PATH_ORDER_RETRIEVE ?? '/ndc/v192/order/retrieve',
+  orderCancel: process.env.LATAM_PATH_ORDER_CANCEL ?? '/ndc/v192/order/cancel',
 };
 
 /** Envelope NDC: cada mensagem tem o SEU namespace, derivado do nome. */
@@ -34,6 +42,9 @@ function partyAndPos(context: RequestContext): string {
         AgencyID: env.latam.agencyId || undefined,
         IATA_Number: env.latam.agencyIata || undefined,
         Name: env.latam.agencyName,
+        TravelAgent: env.latam.travelAgentId
+          ? { TravelAgentID: env.latam.travelAgentId }
+          : undefined,
       },
     },
   });
@@ -110,16 +121,38 @@ export class LatamCommands {
   }
 
   /**
-   * OfferPrice = tarifar. Exige OfferRefID + OfferItemRefID (doc price-offer-v2,
-   * tabela de campos obrigatórios) — por isso os dois viajam na chave da oferta.
+   * OfferPrice = tarifar.
+   *
+   * 🔴 O XSD cobra três coisas que a doc não destaca, e o gateway rejeita cada
+   * uma com um erro diferente:
+   *   - `OwnerCode` depois do OfferRefID (`cvc-complex-type.2.4.a`);
+   *   - `PaxRefID` dentro do SelectedOfferItem;
+   *   - a `PaxList` de volta em `DataLists` — sem ela o PaxRefID vira
+   *     `cvc-identity-constraint.4.3: Key 'PaxIDKeyRef4' not found`.
+   *
+   * Por isso os PaxIDs da busca viajam na chave da oferta: o `/quote` recebe só
+   * o identifier e precisa reconstruir a mesma lista que o AirShopping usou.
    */
-  async offerPrice(offerId: string, offerItemId: string | null, context: RequestContext): Promise<LatamResult> {
+  async offerPrice(
+    offerId: string,
+    offerItemId: string | null,
+    paxIds: string[],
+    context: RequestContext,
+  ): Promise<LatamResult> {
+    const pax = paxIds.length > 0 ? paxIds : ['ADT_1'];
+
     const inner = partyAndPos(context)
       + toXml('Request', {
+        DataLists: {
+          PaxList: { Pax: pax.map((paxId) => ({ PaxID: paxId, PTC: paxId.split('_')[0] })) },
+        },
         PricedOffer: {
           SelectedOffer: {
             OfferRefID: offerId,
-            SelectedOfferItem: offerItemId ? { OfferItemRefID: offerItemId } : undefined,
+            OwnerCode: OWNER_CODE,
+            SelectedOfferItem: offerItemId
+              ? { OfferItemRefID: offerItemId, PaxRefID: pax }
+              : undefined,
           },
         },
       });
@@ -137,25 +170,44 @@ export class LatamCommands {
     offerId: string,
     offerItemId: string | null,
     passengers: Array<Record<string, unknown>>,
+    contacts: Array<Record<string, unknown>>,
     context: RequestContext,
   ): Promise<LatamResult> {
+    // Os PaxIDs saem da própria PaxList: o SelectedOfferItem tem que referenciar
+    // exatamente quem está declarado, ou o XSD reclama de chave não encontrada.
+    const paxIds = passengers.map((pax) => String(pax.PaxID));
+
     const inner = partyAndPos(context)
       + toXml('Request', {
         CreateOrder: {
           SelectedOffer: {
             OfferRefID: offerId,
-            SelectedOfferItem: offerItemId ? { OfferItemRefID: offerItemId } : undefined,
+            // Mesma exigência do OfferPrice — ver o comentário lá em cima.
+            OwnerCode: OWNER_CODE,
+            SelectedOfferItem: offerItemId
+              ? { OfferItemRefID: offerItemId, PaxRefID: paxIds }
+              : undefined,
           },
         },
-        DataLists: { PaxList: { Pax: passengers } },
+        DataLists: {
+          ContactInfoList: contacts.length > 0 ? { ContactInfo: contacts } : undefined,
+          PaxList: { Pax: passengers },
+        },
       });
 
     return this.client.send('OrderCreate', PATHS.orderCreate, envelope('IATA_OrderCreateRQ', inner), context);
   }
 
+  /**
+   * 🔴 O `Order` não fica solto no Request: ele vive dentro de
+   * `OrderFilterCriteria`. Sem esse nível o gateway responde 911
+   * `cvc-complex-type.2.4.a` apontando o próprio `Order` como inesperado.
+   */
   async orderRetrieve(orderId: string, context: RequestContext): Promise<LatamResult> {
     const inner = partyAndPos(context)
-      + toXml('Request', { Order: { OrderID: orderId } });
+      + toXml('Request', {
+        OrderFilterCriteria: { Order: { OrderID: orderId, OwnerCode: OWNER_CODE } },
+      });
 
     return this.client.send('OrderRetrieve', PATHS.orderRetrieve, envelope('IATA_OrderRetrieveRQ', inner), context);
   }

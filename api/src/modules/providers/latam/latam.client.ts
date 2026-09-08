@@ -79,7 +79,7 @@ export class LatamClient {
     this.config = { ...env.latam, ...(config ?? {}) };
 
     this.http = axios.create({
-      baseURL: this.config.endpoint,
+      baseURL: this.config.endpoint.replace(/\/+$/, ''),
       headers: { 'Content-Type': 'application/xml', Accept: 'application/xml' },
       responseType: 'text',
       transitional: { clarifyTimeoutError: true },
@@ -89,7 +89,7 @@ export class LatamClient {
     });
 
     this.oauth = axios.create({
-      baseURL: this.config.tokenEndpoint,
+      baseURL: this.config.tokenEndpoint.replace(/\/+$/, ''),
       responseType: 'json',
       validateStatus: () => true,
     });
@@ -174,13 +174,12 @@ export class LatamClient {
    * Os headers obrigatórios são montados AQUI, não nos comandos — mesma razão
    * dos custom parameters da Travelfusion: operação nova nasce conforme.
    */
-  private headers(token: string, context: RequestContext): Record<string, string> {
+private headers(token: string, context: RequestContext): Record<string, string> {
     return {
       Authorization: `Bearer ${token}`,
       'X-latam-client-name': this.config.clientName,
       'X-latam-Application-Name': this.config.applicationName,
       'X-latam-api-key': this.config.apiKey,
-      // Único por request — é o que a LATAM pede no troubleshooting.
       'X-latam-Track-Id': context.correlationId ?? randomUUID(),
       'X-latam-Country': context.pointOfSale ?? this.config.country,
       'X-latam-Lang': this.config.lang,
@@ -210,6 +209,7 @@ export class LatamClient {
 
       try {
         const token = await this.getToken(forceToken);
+
         const response = await this.http.post<string>(path, body, {
           timeout: readMs + CONNECT_TIMEOUT_MS,
           headers: this.headers(token, context),
