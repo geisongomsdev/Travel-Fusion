@@ -75,6 +75,21 @@ npm run dev            # porta 5173
 
 Sem whitelist de IP. Aprovação da LATAM só é necessária para app de **produção**.
 
+🔴 **Key que gera token não é key que busca.** O `/oauth/cc/token` devolve `200` para qualquer app
+registrado, mas o gateway NDC recusa com `403122004 Forbidden User` os apps que não têm a API
+liberada. Um token válido não prova acesso — a prova é um `AirShopping` que volta `200`.
+
+Além da Key/Secret, **toda mensagem NDC carrega a identidade da agência**, e cada campo ausente tem
+seu próprio 403:
+
+| Variável | Sem ela | O que é |
+|---|---|---|
+| `LATAM_AGENCY_IATA` | `403122010` | O número IATA **da sua agência**. O `75996406` do guia do Postman é de uma agência de demonstração e não vale para a sua Key. |
+| `LATAM_TRAVEL_AGENT_ID` | `403122009 Missing Agent Info` | O e-mail do agente cadastrado. Vira `<TravelAgent><TravelAgentID>`. |
+| `LATAM_COUNTRY` | `403122003` | A praça onde a agência está cadastrada — e ela precisa bater com o `POS` da mensagem. Uma agência registrada em `BR` é recusada com `POS: CL`. |
+
+`LATAM_AGENCY_ID` entra na mensagem mas o sandbox **não valida** o valor.
+
 **Travelfusion** — o Welcome Pack entrega três contas diferentes, e trocá-las devolve
 `4-3900 Invalid credentials`. A do `.env` é a da linha **"API account"**, não a do portal Reports nem
 a do IBE. Seis senhas erradas seguidas **desativam** o usuário, por isso o `getLoginId` tem cache
@@ -89,6 +104,38 @@ A API responde `401 PROVIDER_AUTHENTICATION_FAILED` **antes de sair para a rede*
 corpo. Não existe modo mock: o duble do NDC vive em `api/test/fixtures/` e só o teste de integração o
 alcança, injetado por construtor. Um duble alcançável pela configuração de runtime vira produção por
 acidente.
+
+---
+
+## O que a doc da LATAM não conta
+
+Tudo abaixo foi descoberto sondando o sandbox, um erro de cada vez. Está aqui porque cada item custou
+uma rodada de tentativa e erro, e o erro que o gateway devolve raramente aponta o campo culpado.
+
+**O token exige `x-api-key` além do Basic Auth.** Só com `-u key:secret` o `/oauth/cc/token` responde
+`401 Invalid credentials` — o que parece credencial errada e não é.
+
+**`offerPrice` é camelCase; o resto é minúsculo.** `/ndc/v192/offerprice` responde
+`404 Invalid url or Method Not Allowed`. O YAML publicado não lista essa rota. As demais
+(`/airshopping`, `/order/create`, `/order/retrieve`, `/order/cancel`) são todas minúsculas.
+
+**O XSD cobra campos que a doc não destaca**, e a mensagem de erro cita o elemento *seguinte* ao que
+faltou:
+
+| Mensagem | Falta | Erro |
+|---|---|---|
+| `OfferPrice` | `OwnerCode` depois do `OfferRefID` | `cvc-complex-type.2.4.a` |
+| `OfferPrice` | `DataLists/PaxList` de volta | `cvc-identity-constraint.4.3: Key 'PaxIDKeyRef4' not found` |
+| `OrderCreate` | `OwnerCode`, `Individual/IndividualID` | `400113025` |
+| `OrderRetrieve` | `Order` dentro de `OrderFilterCriteria` | `911` |
+
+**A ordem dos elementos é alfabética, e é obrigatória.** Em `Pax`: `ContactInfoRefID`, `IdentityDoc`,
+`Individual`, `PaxID`, `PTC` — e dentro de `Individual`, `Birthdate` antes de `GivenName`. Fora dessa
+sequência o gateway recusa sem dizer qual campo está no lugar errado.
+
+Por isso o duble em `api/test/fixtures/latam-ndc-double.mjs` é chato de propósito: ele repete essas
+validações. Cada regra ali veio de um 400/403 real, e é o que faz `latam.integration.spec.ts` pegar a
+regressão antes do sandbox.
 
 ---
 
@@ -113,11 +160,39 @@ api/test/
   latam.spec.ts              normalizador contra a amostra REAL do portal (433KB)
   latam.integration.spec.ts  provider inteiro contra o duble
 web/src/
-  steps/             busca → resultados → tarifar → reservar → finalizar
+  components/ui/     primitivos com a identidade do portal LATAM (Roboto, índigo #1B0188)
+  steps/             busca → escolher → tarifar → reservar
 ```
 
 O `xml.util` vive em `common/` porque os dois provedores o usam — dentro de um deles, a dependência
 apontaria na direção errada.
+
+---
+
+## O front
+
+Uma tela só, que percorre o fluxo inteiro e mostra o contrato acontecendo: o painel de eventos ao
+lado da busca exibe cada quadro do SSE na ordem em que chega, que é onde a diferença entre um
+provedor síncrono e um de polling fica visível.
+
+A identidade visual vem do próprio **portal Sandbox Direct Connect** — os tokens foram lidos da
+página, não estimados:
+
+| | |
+|---|---|
+| Índigo estrutural | `#1B0188` — toolbar, rodapé, passo concluído, botão secundário |
+| Vermelho da marca | `#E8114B` — só na ação que avança o fluxo (buscar, tarifar, reservar) |
+| Fundo / texto | `#FAFAFA` / `rgba(0,0,0,.87)` |
+| Tipografia | Roboto 300/400/500/700 |
+| Cartão | branco, raio 4px, elevação 1 do Material (`.elevation-1`) |
+
+Tudo passa por variável CSS em `web/src/index.css`; nenhum componente carrega hex solto. Trocar a
+paleta é trocar aquele bloco.
+
+**Uma decisão de exibição vale nota:** a LATAM devolve uma oferta por família tarifária, então o
+mesmo voo chega repetido — a busca GRU→SCL traz 422 tarifas para 94 voos. Listar cru viraria cinco
+cartões idênticos com preços diferentes. `ResultsStep` agrupa por voo e deixa as famílias como
+escolha dentro do cartão; o `identifier` continua sendo o da família escolhida, nunca remontado.
 
 ---
 
@@ -128,7 +203,12 @@ apontaria na direção errada.
 | Implementado | `/availability` (stream), `/quote`, `/booking`, `/retrieve`, `/fare-rules`, `/ping` |
 | **501** declarado | assentos, ancillaries avulsos, pagamento, emissão, e-ticket, cancelamento |
 | Bloqueio Travelfusion | IP não whitelistado — `Login` passa, comando seguinte volta `4-3448` |
-| Bloqueio LATAM | falta registrar o app no portal Apigee (Key/Secret) |
+| LATAM | **funcionando ponta a ponta** contra o sandbox |
+
+O fluxo completo foi percorrido contra o sandbox real da LATAM: busca GRU→SCL (422 tarifas),
+tarifação, reserva (localizador `LA9579666ZURB`, `status: OPENED`) e recuperação da ordem com
+passageiro, documento e nascimento de volta. As rotas `501` respondem `CAPABILITY_NOT_SUPPORTED`,
+como declarado.
 
 Duas capacidades são **501 por honestidade**, não por preguiça: a Travelfusion não separa reservar de
 emitir (o `StartBooking` já cobra, então `/issue` é 501), e a LATAM devolve penalidade estruturada em
