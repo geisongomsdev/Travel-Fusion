@@ -1,3 +1,6 @@
+/* Estilos base do react-day-picker; o visual vem do mapa de classNames. */
+@import 'react-day-picker/style.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

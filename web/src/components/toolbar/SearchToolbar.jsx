@@ -1,21 +1,16 @@
-import { ArrowLeftRight, Plane, Search, Users, CalendarDays, Cable, Loader2 } from 'lucide-react';
+import { ArrowLeftRight, Search, Users, Cable, Route, Armchair, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input, Select } from '@/components/ui/input';
+import { AirportCombobox } from '@/components/ui/airport-combobox';
+import { DatePicker } from '@/components/ui/date-picker';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import {
-  TOOLBAR_CHIP,
-  TOOLBAR_CONTROL,
-  TOOLBAR_ICON,
-  TOOLBAR_ICON_BUTTON,
-  TOOLBAR_ICON_STROKE_WIDTH,
-  TOOLBAR_SEARCH,
-  TOOLBAR_SELECTED,
-} from './toolbar-styles';
+import { TOOLBAR_CHIP, TOOLBAR_ICON, TOOLBAR_ICON_STROKE_WIDTH } from './toolbar-styles';
 
 /**
- * A barra de busca no padrão do `TravelsToolbar`: a barra não tem moldura, e
- * cada controle é um chip. O ícone entra ANTES do controle, esmaecido e com
- * traço 1.5 — é o que dá a leitura de "campo etiquetado" sem precisar de label.
+ * A barra de busca no padrão do `TravelsToolbar`: a barra não tem moldura e
+ * cada controle é um chip. Nenhum controle é nativo — `select` e data usam os
+ * componentes do design system, porque o `<select>` e o `input[type=date]` do
+ * navegador não aceitam estilo no menu e ficavam com cara de sistema.
  */
 
 const PROVIDERS = [
@@ -30,70 +25,60 @@ const TRIP_TYPES = [
 ];
 
 const CABINS = [
-  { value: 'economy', label: 'Economy' },
-  { value: 'premium_economy', label: 'Premium Economy' },
-  { value: 'business', label: 'Business' },
-  { value: 'first', label: 'First' },
+  { value: 'economy', label: 'Economy', code: 'Y' },
+  { value: 'premium_economy', label: 'Premium Economy', code: 'W' },
+  { value: 'business', label: 'Business', code: 'C' },
+  { value: 'first', label: 'First', code: 'F' },
 ];
 
-/** Rótulo esmaecido + controle, o agrupamento que a barra usa. */
-function Field({ icon: Icon, children, className }) {
-  return (
-    <div className={cn('flex items-center gap-1.5', className)}>
-      <Icon className={cn('size-4 shrink-0', TOOLBAR_ICON)} strokeWidth={TOOLBAR_ICON_STROKE_WIDTH} />
-      {children}
-    </div>
-  );
-}
+const PASSENGERS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+/** Gatilho de select no desenho de chip da barra. */
+const chipTrigger = cn(
+  'gap-1.5 border-0 shadow-none',
+  'bg-primary/5 text-muted-foreground hover:bg-primary/10',
+  'data-[state=open]:bg-primary/10',
+  "[&_svg]:[stroke-width:1.5] [&_svg:not([class*='text-'])]:text-muted-foreground [&_svg]:opacity-50",
+);
 
 export function SearchToolbar({ form, onChange, onSwap, onSubmit, running }) {
-  const update = (key) => (event) => onChange(key, event.target.value);
-
   return (
-    <form
-      onSubmit={onSubmit}
-      className="flex flex-wrap items-center gap-2"
-    >
-      <Field icon={Cable}>
-        <Select
-          value={form.provider}
-          onChange={update('provider')}
-          aria-label="Provedor"
-          className={cn('w-auto pr-8', TOOLBAR_CONTROL)}
-        >
+    <form onSubmit={onSubmit} className="flex flex-wrap items-center gap-2">
+      <Select value={form.provider} onValueChange={(value) => onChange('provider', value)}>
+        <SelectTrigger className={chipTrigger} aria-label="Provedor">
+          <Cable strokeWidth={TOOLBAR_ICON_STROKE_WIDTH} />
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
           {PROVIDERS.map((provider) => (
-            <option key={provider.value} value={provider.value}>
-              {provider.label} · {provider.hint}
-            </option>
+            <SelectItem key={provider.value} value={provider.value}>
+              {provider.label}
+              <span className="ml-1 text-xs text-muted-foreground">{provider.hint}</span>
+            </SelectItem>
           ))}
-        </Select>
-      </Field>
+        </SelectContent>
+      </Select>
 
-      <Field icon={Plane}>
-        <Select
-          value={form.type}
-          onChange={update('type')}
-          aria-label="Tipo de viagem"
-          className={cn('w-auto pr-8', TOOLBAR_CONTROL)}
-        >
+      <Select value={form.type} onValueChange={(value) => onChange('type', value)}>
+        <SelectTrigger className={chipTrigger} aria-label="Tipo de viagem">
+          <Route strokeWidth={TOOLBAR_ICON_STROKE_WIDTH} />
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
           {TRIP_TYPES.map((type) => (
-            <option key={type.value} value={type.value}>{type.label}</option>
+            <SelectItem key={type.value} value={type.value}>{type.label}</SelectItem>
           ))}
-        </Select>
-      </Field>
+        </SelectContent>
+      </Select>
 
-      {/* Origem → destino formam UM chip, com o inversor no meio: são um par,
-          e separá-los em dois controles perderia essa leitura. */}
-      <div className={cn('flex h-9 items-center rounded-md px-1', TOOLBAR_CHIP)}>
-        <input
+      {/* Origem e destino formam um par: o inversor mora entre os dois. */}
+      <div className="flex items-center gap-1">
+        <AirportCombobox
+          id="origin"
+          label="Origem"
           value={form.origin}
-          onChange={update('origin')}
-          maxLength={3}
-          aria-label="Origem"
-          className={cn(
-            'h-7 w-14 rounded-sm bg-transparent px-2 text-center text-sm font-medium uppercase text-foreground outline-none',
-            'focus-visible:bg-background/70',
-          )}
+          onChange={(iata) => onChange('origin', iata)}
+          className="min-w-[9.5rem]"
         />
         <Button
           type="button"
@@ -102,62 +87,59 @@ export function SearchToolbar({ form, onChange, onSwap, onSubmit, running }) {
           onClick={onSwap}
           title="Inverter origem e destino"
           aria-label="Inverter origem e destino"
-          className="size-7 hover:bg-primary/10"
+          className="size-9 shrink-0 transition-transform duration-300 hover:rotate-180 hover:bg-primary/10"
         >
           <ArrowLeftRight className={cn('size-3.5', TOOLBAR_ICON)} strokeWidth={TOOLBAR_ICON_STROKE_WIDTH} />
         </Button>
-        <input
+        <AirportCombobox
+          id="destination"
+          label="Destino"
           value={form.destination}
-          onChange={update('destination')}
-          maxLength={3}
-          aria-label="Destino"
-          className={cn(
-            'h-7 w-14 rounded-sm bg-transparent px-2 text-center text-sm font-medium uppercase text-foreground outline-none',
-            'focus-visible:bg-background/70',
-          )}
+          onChange={(iata) => onChange('destination', iata)}
+          className="min-w-[9.5rem]"
         />
       </div>
 
-      <Field icon={CalendarDays}>
-        <Input
-          type="date"
-          value={form.date}
-          onChange={update('date')}
-          aria-label="Data de ida"
-          className={cn('w-auto tabular-nums', TOOLBAR_SEARCH, 'h-9')}
-        />
-      </Field>
+      <DatePicker
+        value={form.date}
+        onChange={(date) => onChange('date', date)}
+        className={cn('h-9', TOOLBAR_CHIP)}
+      />
 
-      <Field icon={Users}>
-        <Input
-          type="number"
-          min={1}
-          max={9}
-          value={form.adults}
-          onChange={update('adults')}
-          aria-label="Adultos"
-          className={cn('w-16 tabular-nums', TOOLBAR_SEARCH, 'h-9')}
-        />
-      </Field>
-
-      <Select
-        value={form.cabin}
-        onChange={update('cabin')}
-        aria-label="Cabine"
-        className={cn('w-auto pr-8', TOOLBAR_CONTROL)}
-      >
-        {CABINS.map((cabin) => (
-          <option key={cabin.value} value={cabin.value}>{cabin.label}</option>
-        ))}
+      <Select value={String(form.adults)} onValueChange={(value) => onChange('adults', Number(value))}>
+        <SelectTrigger className={chipTrigger} aria-label="Adultos">
+          <Users strokeWidth={TOOLBAR_ICON_STROKE_WIDTH} />
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {PASSENGERS.map((count) => (
+            <SelectItem key={count} value={String(count)}>
+              {count} {count === 1 ? 'adulto' : 'adultos'}
+            </SelectItem>
+          ))}
+        </SelectContent>
       </Select>
 
-      {/* A ação é o único elemento sólido da barra — tudo mais é chip. */}
-      <Button type="submit" disabled={running} className="ml-auto h-9">
+      <Select value={form.cabin} onValueChange={(value) => onChange('cabin', value)}>
+        <SelectTrigger className={chipTrigger} aria-label="Cabine">
+          <Armchair strokeWidth={TOOLBAR_ICON_STROKE_WIDTH} />
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {CABINS.map((cabin) => (
+            <SelectItem key={cabin.value} value={cabin.value}>
+              {cabin.label}
+              <span className="ml-1 font-mono text-xs text-muted-foreground">{cabin.code}</span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      {/* A ação é o único elemento sólido da barra — todo o resto é chip. */}
+      <Button type="submit" disabled={running || !form.origin || !form.destination} className="ml-auto">
         {running ? <Loader2 className="animate-spin" /> : <Search />}
         {running ? 'Buscando…' : 'Buscar'}
       </Button>
     </form>
   );
 }
-
-export { TOOLBAR_SELECTED };
