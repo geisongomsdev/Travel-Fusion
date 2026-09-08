@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 export function ErrorPanel({ error }) {
   if (!error) return null;
   return (
-    <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+    <div className="elevation-1 rounded-lg border-l-4 border-destructive bg-card p-4">
       <div className="flex items-start gap-3">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
         <div className="min-w-0 space-y-2">
