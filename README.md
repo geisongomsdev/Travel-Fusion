@@ -160,7 +160,8 @@ api/test/
   latam.spec.ts              normalizador contra a amostra REAL do portal (433KB)
   latam.integration.spec.ts  provider inteiro contra o duble
 web/src/
-  components/ui/     primitivos com a identidade do portal LATAM (Roboto, índigo #1B0188)
+  components/sandbox/  CodeBlock, FieldTable, Callout, Endpoint — os componentes das páginas do portal
+  components/ui/       primitivos (botão-pílula, cartão, campo) sobre os tokens da LATAM
   steps/             busca → escolher → tarifar → reservar
 ```
 
@@ -171,28 +172,35 @@ apontaria na direção errada.
 
 ## O front
 
-Uma tela só, que percorre o fluxo inteiro e mostra o contrato acontecendo: o painel de eventos ao
-lado da busca exibe cada quadro do SSE na ordem em que chega, que é onde a diferença entre um
-provedor síncrono e um de polling fica visível.
+Uma tela só, que percorre o fluxo inteiro e mostra o contrato acontecendo.
 
-A identidade visual vem do próprio **portal Sandbox Direct Connect** — os tokens foram lidos da
-página, não estimados:
+O vocabulário visual é o das **páginas de operação do sandbox** (`docs-api/latam/latam/`) — quatro
+componentes que se repetem em toda operação, reproduzidos em `web/src/components/sandbox/`:
 
-| | |
-|---|---|
-| Índigo estrutural | `#1B0188` — toolbar, rodapé, passo concluído, botão secundário |
-| Vermelho da marca | `#E8114B` — só na ação que avança o fluxo (buscar, tarifar, reservar) |
-| Fundo / texto | `#FAFAFA` / `rgba(0,0,0,.87)` |
-| Tipografia | Roboto 300/400/500/700 |
-| Cartão | branco, raio 4px, elevação 1 do Material (`.elevation-1`) |
+| Componente | De onde veio | Onde aparece |
+|---|---|---|
+| `CodeBlock` | o print em `assets/aishopping-airshoppingrs-base-…png` — Material Oceanic sobre `#263238` | AirShoppingRQ, resposta do `/booking`, erro do provedor |
+| `FieldTable` | a tabela `Field Name / Type / Accepted Values / Required` de `operations/*.md` | os `requiredParameters` que o `/quote` declara |
+| `Callout` | os blocos `### Advice` (com o triângulo de `assets/warning-sign-…jpg`) e `**Note:**` | idempotência do OrderCreate, ordem do XSD, multi-pax |
+| `Endpoint` | a faixa `### URL Endpoint` que abre cada operação | topo de cada passo |
 
-Tudo passa por variável CSS em `web/src/index.css`; nenhum componente carrega hex solto. Trocar a
-paleta é trocar aquele bloco.
+O realce de sintaxe é regex própria: são só XML e JSON, e uma biblioteca de highlight custaria mais
+bytes que o resto do bundle junto.
+
+A cor institucional é a do site da LATAM (`#10004F`), não a do template Apigee, e o botão é **pílula
+com peso 600** como o deles — não retângulo de 4px em caixa alta.
+
+🔴 **O que não fazer:** a primeira versão desta tela usou o `home-page-card-header` do portal — a
+faixa índigo sólida — como padrão de todo `CardHeader`. Aquilo é o cabeçalho de três cartõezinhos de
+navegação da home; como padrão vira uma barra pesada em cima de cada formulário, empilhada com o
+toolbar e a faixa de título. A hierarquia aqui é tipográfica, que é como as páginas de operação
+realmente se organizam.
 
 **Uma decisão de exibição vale nota:** a LATAM devolve uma oferta por família tarifária, então o
 mesmo voo chega repetido — a busca GRU→SCL traz 422 tarifas para 94 voos. Listar cru viraria cinco
 cartões idênticos com preços diferentes. `ResultsStep` agrupa por voo e deixa as famílias como
 escolha dentro do cartão; o `identifier` continua sendo o da família escolhida, nunca remontado.
+
 
 ---
 

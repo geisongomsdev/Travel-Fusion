@@ -113,12 +113,13 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      {/* `mat-toolbar` do portal: 64px, índigo, conteúdo alinhado ao container. */}
-      <header className="h-toolbar shrink-0 bg-primary text-primary-foreground elevation-2">
+      {/* Uma faixa índigo só, no topo. Era esse empilhamento de barras que
+          deixava a tela pesada. */}
+      <header className="h-16 shrink-0 bg-primary text-primary-foreground">
         <div className="mx-auto flex h-full max-w-6xl items-center justify-between gap-4 px-6">
           <a href="/" className="flex items-center gap-3">
             <LatamMark />
-            <span className="text-lg font-normal tracking-wide">Pass · Motor de voos</span>
+            <span className="text-[15px] font-semibold tracking-wide">Pass · Motor de voos</span>
           </a>
           <nav className="flex items-center gap-1">
             <Button variant="toolbar" size="sm" onClick={reset}>
@@ -133,17 +134,15 @@ export default function App() {
         </div>
       </header>
 
-      {/* Faixa de título de página, o segundo nível do portal. */}
-      <div className="shrink-0 bg-primary/95 text-primary-foreground">
-        <div className="mx-auto max-w-6xl px-6 py-3">
-          <h1 className="text-xl font-normal">Fluxo de venda, ponta a ponta</h1>
-          <p className="text-xs opacity-80">
+      <main className="mx-auto w-full max-w-6xl flex-1 space-y-6 px-6 py-8">
+        {/* Título de página em texto, não em faixa colorida. */}
+        <div>
+          <h1 className="text-2xl font-semibold text-primary">Fluxo de venda, ponta a ponta</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             LATAM NDC v19.2 (síncrono) e Travelfusion Direct Connect (polling) atrás do mesmo contrato.
           </p>
         </div>
-      </div>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 space-y-6 px-6 py-6">
         <Steps steps={STEPS} current={step} />
 
         <ErrorPanel error={error} />
@@ -168,7 +167,7 @@ export default function App() {
         )}
       </main>
 
-      <footer className="shrink-0 bg-primary py-3 text-center text-xs text-primary-foreground/80">
+      <footer className="shrink-0 border-t border-border py-4 text-center text-xs text-muted-foreground">
         Pass · integração LATAM NDC + Travelfusion
       </footer>
     </div>

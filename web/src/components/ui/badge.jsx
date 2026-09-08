@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 
 /** `mat-chip`: pílula compacta. As cores saem dos tokens, nunca de hex solto. */
 const badgeVariants = cva(
-  'inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium leading-5 transition-colors',
+  'inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold leading-5 transition-colors',
   {
     variants: {
       variant: {

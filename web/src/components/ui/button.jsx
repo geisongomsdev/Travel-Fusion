@@ -4,29 +4,30 @@ import { cva } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
 /**
- * `mat-raised-button` do portal: caixa alta, peso 500, raio 4px e elevação que
- * sobe no hover. `brand` é o vermelho LATAM e fica só na ação que avança o
- * fluxo (buscar, tarifar, reservar); `default` é o índigo estrutural.
+ * Botão da LATAM: **pílula**, peso 600, sem caixa alta — foi o que a página
+ * deles devolveu (`border-radius: 50px`, `font-weight: 600`,
+ * `text-transform: none`). A primeira versão daqui usava retângulo de 4px em
+ * maiúsculas, que é Material genérico, não LATAM.
  */
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium uppercase tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-40',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-40',
   {
     variants: {
       variant: {
-        default: 'elevation-1 bg-primary text-primary-foreground hover:elevation-2 hover:bg-primary/90',
-        brand: 'elevation-1 bg-brand text-brand-foreground hover:elevation-2 hover:bg-brand/90',
-        outline: 'border border-input bg-transparent hover:bg-accent hover:text-accent-foreground',
-        secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
+        default: 'bg-primary text-primary-foreground hover:bg-primary/90',
+        brand: 'bg-brand text-brand-foreground hover:bg-brand/90',
+        outline: 'border border-input bg-transparent hover:border-primary hover:bg-accent hover:text-accent-foreground',
+        secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/70',
         ghost: 'hover:bg-accent hover:text-accent-foreground',
-        destructive: 'elevation-1 bg-destructive text-destructive-foreground hover:bg-destructive/90',
-        // Botão dentro do toolbar índigo: só o hover translúcido, como no Material.
-        toolbar: 'text-primary-foreground hover:bg-white/15',
+        destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
+        /** Dentro da barra índigo: só o hover translúcido. */
+        toolbar: 'font-normal text-white/85 hover:bg-white/12 hover:text-white',
       },
       size: {
-        default: 'h-9 px-4',
-        sm: 'h-8 px-3 text-xs',
-        lg: 'h-11 px-8',
-        icon: 'h-9 w-9 px-0',
+        default: 'h-10 px-5',
+        sm: 'h-8 px-3.5 text-[13px]',
+        lg: 'h-12 px-8 text-base',
+        icon: 'h-10 w-10 px-0',
       },
     },
     defaultVariants: { variant: 'default', size: 'default' },

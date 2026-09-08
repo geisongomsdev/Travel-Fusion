@@ -2,55 +2,46 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 
 /**
- * `mat-card` do portal: branco, raio 4px, elevação 1. A borda some — no
- * Material a separação vem da sombra, não de um traço.
+ * Cartão de conteúdo das páginas do sandbox: branco, borda de 1px, sombra
+ * quase imperceptível.
+ *
+ * 🔴 O header NÃO é mais uma faixa índigo. Aquilo era o `home-page-card-header`
+ * de três cartõezinhos de navegação da home do portal — como padrão de todo
+ * cartão virava uma barra pesada em cima de cada formulário. A hierarquia aqui
+ * é tipográfica, que é como as páginas de operação realmente se organizam.
  */
 const Card = React.forwardRef(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={cn('elevation-1 overflow-hidden rounded-lg bg-card text-card-foreground', className)}
+    className={cn('shadow-card overflow-hidden rounded-lg border border-border bg-card text-card-foreground', className)}
     {...props}
   />
 ));
 Card.displayName = 'Card';
 
-/**
- * `home-page-card-header`: faixa índigo com texto claro no topo do cartão.
- * É o componente que dá a cara do portal — por isso é o padrão aqui, com
- * `tone="plain"` para os cartões secundários que não devem competir.
- */
-const CardHeader = React.forwardRef(({ className, tone = 'brand', ...props }, ref) => (
-  <div
-    ref={ref}
-    className={cn(
-      'flex flex-col gap-1 px-4 py-3',
-      tone === 'brand' && 'bg-primary text-primary-foreground',
-      tone === 'plain' && 'border-b border-border',
-      className,
-    )}
-    {...props}
-  />
+const CardHeader = React.forwardRef(({ className, ...props }, ref) => (
+  <div ref={ref} className={cn('flex flex-col gap-1 px-5 pb-3 pt-4', className)} {...props} />
 ));
 CardHeader.displayName = 'CardHeader';
 
+/** `##` da página de operação: peso 600, sem caixa alta. */
 const CardTitle = React.forwardRef(({ className, ...props }, ref) => (
-  <h3 ref={ref} className={cn('text-base font-medium leading-tight tracking-tight', className)} {...props} />
+  <h2 ref={ref} className={cn('text-[15px] font-semibold leading-tight text-primary', className)} {...props} />
 ));
 CardTitle.displayName = 'CardTitle';
 
-/** Herda a cor do header, por isso `opacity` no lugar de uma cor fixa. */
 const CardDescription = React.forwardRef(({ className, ...props }, ref) => (
-  <p ref={ref} className={cn('text-xs opacity-80', className)} {...props} />
+  <p ref={ref} className={cn('text-[13px] leading-relaxed text-muted-foreground', className)} {...props} />
 ));
 CardDescription.displayName = 'CardDescription';
 
 const CardContent = React.forwardRef(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn('p-4', className)} {...props} />
+  <div ref={ref} className={cn('px-5 pb-5', className)} {...props} />
 ));
 CardContent.displayName = 'CardContent';
 
 const CardFooter = React.forwardRef(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn('flex items-center gap-2 border-t border-border px-4 py-3', className)} {...props} />
+  <div ref={ref} className={cn('flex items-center gap-2 border-t border-border px-5 py-3', className)} {...props} />
 ));
 CardFooter.displayName = 'CardFooter';
 
