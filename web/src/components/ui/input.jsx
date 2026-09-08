@@ -1,19 +1,15 @@
 import * as React from 'react';
 import { cn } from '@/lib/utils';
 
-/**
- * Campo do Material em modo `outline`: borda de 1px que engrossa e vira índigo
- * no foco. Sem sombra — no Material a elevação é do cartão, não do campo.
- */
+/** `sandbox/src/components/ui/input.tsx`: h-9, rounded-md, fundo transparente. */
 const Input = React.forwardRef(({ className, type, ...props }, ref) => (
   <input
-    type={type}
     ref={ref}
+    type={type}
+    data-slot="input"
     className={cn(
-      'flex h-10 w-full rounded-md border border-input bg-card px-3 text-sm transition-colors',
-      'placeholder:text-muted-foreground hover:border-foreground/40',
-      'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary',
-      'disabled:cursor-not-allowed disabled:opacity-50',
+      'placeholder:text-muted-foreground selection:bg-primary selection:text-primary-foreground border-input flex h-9 w-full min-w-0 rounded-md border bg-transparent px-3 py-1.5 text-base shadow-xs transition-[color,box-shadow] outline-none disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm',
+      'focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[2px]',
       className,
     )}
     {...props}
@@ -21,15 +17,14 @@ const Input = React.forwardRef(({ className, type, ...props }, ref) => (
 ));
 Input.displayName = 'Input';
 
-/** Mesmo desenho do Input, para os `<select>` do formulário não destoarem. */
+/** Mesmo desenho do `SelectTrigger` de lá, sem trazer o Radix junto. */
 const Select = React.forwardRef(({ className, ...props }, ref) => (
   <select
     ref={ref}
+    data-slot="select-trigger"
     className={cn(
-      'flex h-10 w-full rounded-md border border-input bg-card px-3 text-sm transition-colors',
-      'hover:border-foreground/40',
-      'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary',
-      'disabled:cursor-not-allowed disabled:opacity-50',
+      'border-input flex h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-md border bg-transparent px-3 py-2 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50',
+      'focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[2px]',
       className,
     )}
     {...props}

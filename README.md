@@ -160,7 +160,9 @@ api/test/
   latam.spec.ts              normalizador contra a amostra REAL do portal (433KB)
   latam.integration.spec.ts  provider inteiro contra o duble
 web/src/
-  components/ui/     primitivos com a identidade do portal LATAM (Roboto, índigo #1B0188)
+  components/toolbar/  o toolbar flat do design system da Pass (chips, ícones 1.5)
+  components/sandbox/  CodeBlock, FieldTable, Callout, Endpoint — das páginas de operação do portal
+  components/ui/       button, input, select, badge, card com as classes do design system
   steps/             busca → escolher → tarifar → reservar
 ```
 
@@ -171,28 +173,34 @@ apontaria na direção errada.
 
 ## O front
 
-Uma tela só, que percorre o fluxo inteiro e mostra o contrato acontecendo: o painel de eventos ao
-lado da busca exibe cada quadro do SSE na ordem em que chega, que é onde a diferença entre um
-provedor síncrono e um de polling fica visível.
+Uma tela só, que percorre o fluxo inteiro e mostra o contrato acontecendo.
 
-A identidade visual vem do próprio **portal Sandbox Direct Connect** — os tokens foram lidos da
-página, não estimados:
+Os componentes vêm do **design system da Pass** (`Pass_projects/sandbox`), não de um tema genérico:
 
 | | |
 |---|---|
-| Índigo estrutural | `#1B0188` — toolbar, rodapé, passo concluído, botão secundário |
-| Vermelho da marca | `#E8114B` — só na ação que avança o fluxo (buscar, tarifar, reservar) |
-| Fundo / texto | `#FAFAFA` / `rgba(0,0,0,.87)` |
-| Tipografia | Roboto 300/400/500/700 |
-| Cartão | branco, raio 4px, elevação 1 do Material (`.elevation-1`) |
+| Paleta | **neutra** — `--primary` é quase preto (oklch 0.205). Cor no chrome é ruído; quem colore a tela é o dado |
+| Fonte | Geist / Geist Mono |
+| Raio | `--radius: 0.625rem`, com a escala `sm/md/lg/xl` derivada dele |
+| Primitivos | `button`, `input`, `badge`, `card` e o trigger do `select` com as classes de `sandbox/src/components/ui/` |
+| Barra | o padrão **flat** do `TravelsToolbar`: a barra some (sem borda, sem sombra) e cada controle vira um chip `bg-primary/5`, hover `bg-primary/10` |
+| Ícones | traço 1.5 e `text-muted-foreground opacity-50` — o tratamento de `data-toolbar-styles.ts` |
+| Status | pílula `bg-<cor>-500/10 text-<cor>-600 border-<cor>-500/20`, como no `ServiceDetailModal` |
 
-Tudo passa por variável CSS em `web/src/index.css`; nenhum componente carrega hex solto. Trocar a
-paleta é trocar aquele bloco.
+Os tokens do toolbar ficam em `web/src/components/toolbar/toolbar-styles.js`, portados um a um — no
+projeto original eles existem justamente para "chip" ser uma decisão só, em um arquivo só.
+
+A exceção deliberada à paleta neutra é o **bloco de código** (`components/sandbox/CodeBlock`), que
+mantém o tema escuro do print em `docs-api/latam/latam/assets/aishopping-…png`. Ali é payload, não
+chrome. Junto dele ficam os outros três componentes das páginas de operação do sandbox de docs:
+`FieldTable` (a tabela `Field Name / Type / Accepted Values / Required`), `Callout` (`### Advice` com
+o triângulo de `assets/warning-sign`, e `**Note:**`) e `Endpoint` (a faixa `### URL Endpoint`).
 
 **Uma decisão de exibição vale nota:** a LATAM devolve uma oferta por família tarifária, então o
 mesmo voo chega repetido — a busca GRU→SCL traz 422 tarifas para 94 voos. Listar cru viraria cinco
 cartões idênticos com preços diferentes. `ResultsStep` agrupa por voo e deixa as famílias como
 escolha dentro do cartão; o `identifier` continua sendo o da família escolhida, nunca remontado.
+
 
 ---
 

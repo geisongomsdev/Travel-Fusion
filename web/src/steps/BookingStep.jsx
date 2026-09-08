@@ -5,6 +5,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { CodeBlock } from '@/components/sandbox/CodeBlock';
+import { Callout } from '@/components/sandbox/Callout';
+import { Endpoint } from '@/components/sandbox/Endpoint';
 
 export function BookingStep({ onBook, running, booking }) {
   const [passenger, setPassenger] = useState({
@@ -19,49 +22,74 @@ export function BookingStep({ onBook, running, booking }) {
   if (booking) return <BookingResult booking={booking} />;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Passageiro</CardTitle>
-        <CardDescription>
-          <code className="text-xs">POST /booking</code> — segura o assento e devolve o localizador. Não cobra nada.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form
-          className="grid gap-4 sm:grid-cols-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onBook([passenger]);
-          }}
-        >
-          <div className="space-y-1.5">
-            <Label htmlFor="title">Tratamento</Label>
-            <Input id="title" value={passenger.title} onChange={update('title')} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="dateOfBirth">Nascimento</Label>
-            <Input id="dateOfBirth" type="date" value={passenger.dateOfBirth} onChange={update('dateOfBirth')} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="firstName">Nome</Label>
-            <Input id="firstName" value={passenger.firstName} onChange={update('firstName')} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="lastName">Sobrenome</Label>
-            <Input id="lastName" value={passenger.lastName} onChange={update('lastName')} />
-          </div>
-          <p className="text-xs text-muted-foreground sm:col-span-2">
-            A idade vai para o provedor calculada na data do voo — em ida-e-volta, na data da volta.
-          </p>
-          <div className="sm:col-span-2">
-            <Button type="submit" variant="brand" disabled={running} className="w-full sm:w-auto">
-              {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ticket className="h-4 w-4" />}
-              {running ? 'Reservando…' : 'Reservar'}
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <Card>
+        <CardHeader>
+          <CardTitle>Order Create</CardTitle>
+          <CardDescription>Segura o assento e devolve o localizador. Não cobra nada.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Endpoint method="POST" path="https://sandbox.api.latam.com/ndc/v192/order/create" />
+
+          <form
+            className="grid gap-4 sm:grid-cols-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onBook([passenger]);
+            }}
+          >
+            <div className="space-y-1.5">
+              <Label htmlFor="title">Tratamento</Label>
+              <Input id="title" value={passenger.title} onChange={update('title')} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="dateOfBirth">Nascimento</Label>
+              <Input id="dateOfBirth" type="date" value={passenger.dateOfBirth} onChange={update('dateOfBirth')} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="firstName">Nome</Label>
+              <Input id="firstName" value={passenger.firstName} onChange={update('firstName')} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="lastName">Sobrenome</Label>
+              <Input id="lastName" value={passenger.lastName} onChange={update('lastName')} />
+            </div>
+
+            <div className="sm:col-span-2">
+              <Callout tone="note" title="Note">
+                O PTC sai da idade na <strong>data do voo</strong> — em ida-e-volta, na data da volta.
+                A LATAM recusa a ordem quando o PTC não bate com o Birthdate.
+              </Callout>
+            </div>
+
+            <div className="sm:col-span-2">
+              <Button type="submit" size="lg" disabled={running} className="w-full sm:w-auto">
+                {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ticket className="h-4 w-4" />}
+                {running ? 'Reservando…' : 'Reservar'}
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card className="h-fit">
+        <CardHeader>
+          <CardTitle>Advice</CardTitle>
+          <CardDescription>Antes de apertar o botão.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Callout tone="advice" title="OrderCreate não é idempotente">
+            Esta é a única mutação do fluxo, e ela roda <strong>sem retry</strong>. Se a resposta se
+            perder, o caminho é o <code className="font-mono text-[12px]">OrderRetrieve</code> — nunca
+            reservar de novo.
+          </Callout>
+          <Callout tone="note" title="Note">
+            A ordem dos elementos do <code className="font-mono text-[12px]">Pax</code> é alfabética e
+            obrigatória: ContactInfoRefID, IdentityDoc, Individual, PaxID, PTC.
+          </Callout>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -74,41 +102,54 @@ function BookingResult({ booking }) {
   const pending = booking.committed && !booking.confirmed;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Reserva</CardTitle>
-        <CardDescription>Localizador e estado devolvidos pelo provedor.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={booking.committed ? 'success' : 'secondary'}>
-            committed: {String(booking.committed)}
-          </Badge>
-          <Badge variant={booking.confirmed ? 'success' : 'warning'}>
-            confirmed: {String(booking.confirmed)}
-          </Badge>
-          <Badge variant="outline">{booking.status}</Badge>
-        </div>
-
-        <div>
-          <p className="text-xs text-muted-foreground">Localizador</p>
-          <p className="font-mono text-lg font-semibold">{booking.locator || '—'}</p>
-        </div>
-
-        {pending && (
-          <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
-            A reserva foi aceita mas ainda não confirmou. Aguarde — o polling continua.
-            <span className="font-medium"> Não reserve de novo:</span> ela pode já existir do lado do fornecedor.
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <Card>
+        <CardHeader>
+          <CardTitle>Order View</CardTitle>
+          <CardDescription>Localizador e estado devolvidos pelo provedor.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="rounded-lg border border-border bg-muted/50 px-4 py-3">
+            <p className="text-xs text-muted-foreground">Localizador</p>
+            <p className="font-mono text-2xl font-semibold text-primary">{booking.locator || '—'}</p>
           </div>
-        )}
 
-        {booking.confirmed && (
-          <div className="rounded-md border border-success/40 bg-success/10 p-3 text-sm">
-            Reserva confirmada. A emissão (<code className="text-xs">/issue</code>) responde 501 neste provedor:
-            na Travelfusion o <code className="text-xs">StartBooking</code> já cobra, então não existe emissão separada.
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={booking.committed ? 'success' : 'secondary'}>
+              committed: {String(booking.committed)}
+            </Badge>
+            <Badge variant={booking.confirmed ? 'success' : 'warning'}>
+              confirmed: {String(booking.confirmed)}
+            </Badge>
+            <Badge variant="outline">{booking.status}</Badge>
           </div>
-        )}
-      </CardContent>
-    </Card>
+
+          {pending && (
+            <Callout tone="advice" title="Aceita, ainda não confirmada">
+              O polling continua. <strong>Não reserve de novo:</strong> ela pode já existir do lado do
+              fornecedor. Consulte por <code className="font-mono text-[12px]">/retrieve</code>.
+            </Callout>
+          )}
+
+          {booking.confirmed && (
+            <Callout tone="success" title="Reserva confirmada">
+              A emissão (<code className="font-mono text-[12px]">/issue</code>) responde 501 neste
+              provedor: na Travelfusion o <code className="font-mono text-[12px]">StartBooking</code> já
+              cobra, então não existe emissão separada.
+            </Callout>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="h-fit">
+        <CardHeader>
+          <CardTitle>Resposta</CardTitle>
+          <CardDescription>O corpo cru, como veio do contrato.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <CodeBlock code={JSON.stringify(booking, null, 2)} language="json" title="booking" maxHeight="20rem" />
+        </CardContent>
+      </Card>
+    </div>
   );
 }

@@ -113,18 +113,19 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      {/* `mat-toolbar` do portal: 64px, índigo, conteúdo alinhado ao container. */}
-      <header className="h-toolbar shrink-0 bg-primary text-primary-foreground elevation-2">
-        <div className="mx-auto flex h-full max-w-6xl items-center justify-between gap-4 px-6">
+      {/* Uma faixa índigo só, no topo. Era esse empilhamento de barras que
+          deixava a tela pesada. */}
+      <header className="h-14 shrink-0 border-b bg-background">
+        <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-4 px-6">
           <a href="/" className="flex items-center gap-3">
             <LatamMark />
-            <span className="text-lg font-normal tracking-wide">Pass · Motor de voos</span>
+            <span className="text-sm font-medium">Pass · Motor de voos</span>
           </a>
           <nav className="flex items-center gap-1">
-            <Button variant="toolbar" size="sm" onClick={reset}>
+            <Button variant="ghost" size="sm" onClick={reset}>
               <RotateCcw className="h-4 w-4" /> Reiniciar
             </Button>
-            <Button variant="toolbar" size="sm" asChild>
+            <Button variant="ghost" size="sm" asChild>
               <a href="http://localhost:3010/docs" target="_blank" rel="noreferrer">
                 Swagger <ExternalLink className="h-3.5 w-3.5" />
               </a>
@@ -133,17 +134,15 @@ export default function App() {
         </div>
       </header>
 
-      {/* Faixa de título de página, o segundo nível do portal. */}
-      <div className="shrink-0 bg-primary/95 text-primary-foreground">
-        <div className="mx-auto max-w-6xl px-6 py-3">
-          <h1 className="text-xl font-normal">Fluxo de venda, ponta a ponta</h1>
-          <p className="text-xs opacity-80">
+      <main className="mx-auto w-full max-w-7xl flex-1 space-y-6 px-6 py-6">
+        {/* Título de página em texto, não em faixa colorida. */}
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Fluxo de venda, ponta a ponta</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             LATAM NDC v19.2 (síncrono) e Travelfusion Direct Connect (polling) atrás do mesmo contrato.
           </p>
         </div>
-      </div>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 space-y-6 px-6 py-6">
         <Steps steps={STEPS} current={step} />
 
         <ErrorPanel error={error} />
@@ -168,19 +167,18 @@ export default function App() {
         )}
       </main>
 
-      <footer className="shrink-0 bg-primary py-3 text-center text-xs text-primary-foreground/80">
+      <footer className="shrink-0 border-t border-border py-4 text-center text-xs text-muted-foreground">
         Pass · integração LATAM NDC + Travelfusion
       </footer>
     </div>
   );
 }
 
-/** Marca de asa da LATAM, redesenhada em SVG para não depender de asset externo. */
+/** Monograma neutro: na paleta da Pass, cor no chrome é ruído. */
 function LatamMark() {
   return (
-    <svg viewBox="0 0 32 24" className="h-6 w-8" aria-label="LATAM" role="img">
-      <path d="M2 16 L20 4 L18 11 L30 8 L12 20 L14 13 Z" fill="hsl(var(--brand))" />
-      <path d="M2 16 L20 4 L18 11 Z" fill="currentColor" opacity="0.9" />
-    </svg>
+    <div className="flex size-7 items-center justify-center rounded-md bg-primary text-[11px] font-semibold text-primary-foreground">
+      P
+    </div>
   );
 }
