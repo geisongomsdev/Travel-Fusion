@@ -1,10 +1,10 @@
 import { useState } from 'react';
+import { Plane } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { SearchToolbar } from '@/components/toolbar/SearchToolbar';
 import { CodeBlock } from '@/components/sandbox/CodeBlock';
-import { Callout } from '@/components/sandbox/Callout';
-import { Endpoint } from '@/components/sandbox/Endpoint';
+import { MessageInspector } from '@/components/sandbox/MessageInspector';
 
 /** Espelha o que o provedor monta, para o XML do painel não mentir. */
 const CABIN_CODE = { economy: 'Y', premium_economy: 'W', business: 'C', first: 'F' };
@@ -95,69 +95,56 @@ export function SearchStep({ onSearch, running, events }) {
       {/* A barra fica solta na página, sem cartão em volta: é o design flat. */}
       <SearchToolbar form={form} onChange={change} onSwap={swap} onSubmit={submit} running={running} />
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-        {isLatam ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>AirShoppingRQ</CardTitle>
-              <CardDescription>A mensagem que sai daqui, montada com a barra acima.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Endpoint method="POST" path="https://sandbox.api.latam.com/ndc/v192/airshopping" />
-              <CodeBlock code={airShoppingRQ(form)} language="xml" title="IATA_AirShoppingRQ" maxHeight="26rem" />
-              <Callout tone="advice" title="Advice">
-                Os valores em <code className="font-mono text-xs">{'{{chaves}}'}</code> vêm do{' '}
-                <code className="font-mono text-xs">.env</code> e não trafegam pelo navegador. Sem{' '}
-                <code className="font-mono text-xs">TravelAgentID</code> a LATAM responde{' '}
-                <strong>403122009 Missing Agent Info</strong> antes de olhar o itinerário.
-              </Callout>
-            </CardContent>
-          </Card>
-        ) : (
-          <Card>
-            <CardHeader>
-              <CardTitle>StartRouting</CardTitle>
-              <CardDescription>A Travelfusion entrega por polling, em lotes incrementais.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Endpoint method="POST" path="https://api.travelfusion.com/Xml" />
-              <Callout tone="advice" title="Advice">
-                O IP precisa estar na whitelist. Sem isso o <code className="font-mono text-xs">Login</code>{' '}
-                passa e o comando seguinte volta <strong>4-3448 Login id not found</strong>.
-              </Callout>
-            </CardContent>
-          </Card>
-        )}
-
+      {/**
+       * Antes de buscar, a tela fica vazia de propósito. O que havia aqui era o
+       * AirShoppingRQ inteiro num cartão: útil para depurar a integração, mas
+       * é documentação ocupando o lugar do conteúdo antes de existir conteúdo.
+       * A mensagem continua acessível — no disclosure no fim da página.
+       */}
+      {events.length === 0 ? (
+        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed py-20 text-center">
+          <Plane className="size-8 text-muted-foreground opacity-40" strokeWidth={1.5} />
+          <div>
+            <p className="text-sm font-medium">Busque um voo para começar</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {isLatam
+                ? 'A LATAM responde de uma vez: uma chamada traz todas as ofertas.'
+                : 'A Travelfusion responde por polling, em lotes incrementais.'}
+            </p>
+          </div>
+        </div>
+      ) : (
         <Card>
           <CardHeader>
             <CardTitle>Eventos do stream</CardTitle>
             <CardDescription>Cada quadro do SSE, na ordem em que chega.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2">
-            {events.length === 0 && (
-              <p className="py-8 text-center text-sm text-muted-foreground">Nenhum evento ainda.</p>
-            )}
-            {events.map((event, index) => (
-              <div key={index} className="flex items-center justify-between gap-2 rounded-md bg-primary/5 px-2.5 py-2">
-                <Badge variant={eventVariant(event.type)}>{event.type}</Badge>
-                <span className="truncate font-mono text-xs tabular-nums text-muted-foreground">
-                  {eventSummary(event)}
-                </span>
-              </div>
-            ))}
-            {events.length > 0 && (
-              <CodeBlock
-                code={JSON.stringify(events[events.length - 1], null, 2)}
-                language="json"
-                title="último evento"
-                maxHeight="14rem"
-                className="mt-3"
-              />
-            )}
+          <CardContent className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <div className="space-y-2">
+              {events.map((event, index) => (
+                <div
+                  key={index}
+                  className="flex items-center justify-between gap-2 rounded-md bg-primary/5 px-2.5 py-2"
+                >
+                  <Badge variant={eventVariant(event.type)}>{event.type}</Badge>
+                  <span className="truncate font-mono text-xs tabular-nums text-muted-foreground">
+                    {eventSummary(event)}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <CodeBlock
+              code={JSON.stringify(events[events.length - 1], null, 2)}
+              language="json"
+              title="último evento"
+              maxHeight="16rem"
+            />
           </CardContent>
         </Card>
-      </div>
+      )}
+
+      {/* Fechado por padrão: quem está vendendo não quer ver envelope NDC. */}
+      <MessageInspector isLatam={isLatam} xml={airShoppingRQ(form)} />
     </div>
   );
 }
