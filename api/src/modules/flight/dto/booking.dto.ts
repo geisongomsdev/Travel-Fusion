@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
-  ArrayMinSize, IsArray, IsObject, IsOptional, IsString, Matches, ValidateNested,
+  ArrayMinSize, IsArray, IsDefined, IsObject, IsOptional, IsString, Matches, ValidateNested,
 } from 'class-validator';
 
 export class QuoteDto {
@@ -99,6 +99,7 @@ export class RetrieveDto {
    * ValidationPipe (ver `forbidNonWhitelisted` no main.ts).
    */
   @ApiProperty({ type: RetrieveBookingAddressDto })
+  @IsDefined()
   @ValidateNested()
   @Type(() => RetrieveBookingAddressDto)
   booking!: RetrieveBookingAddressDto;
@@ -117,6 +118,7 @@ export class FareRulesDto {
   provider?: string;
 
   @ApiProperty({ type: FareRulesKeyDto, description: 'Fechado: nenhum outro campo aqui dentro.' })
+  @IsDefined()
   @ValidateNested()
   @Type(() => FareRulesKeyDto)
   fareRules!: FareRulesKeyDto;

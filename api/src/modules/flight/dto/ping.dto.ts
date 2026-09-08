@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsNotEmptyObject, IsString, ValidateNested } from 'class-validator';
+import { IsDefined, IsIn, IsNotEmptyObject, IsString, ValidateNested } from 'class-validator';
 
 export type PingEnvironment = 'sandbox' | 'production';
 
@@ -35,11 +35,13 @@ export class PingProbeDto {
 
 export class PingDto {
   @ApiProperty({ type: PingOptionsDto })
+  @IsDefined()
   @ValidateNested()
   @Type(() => PingOptionsDto)
   options!: PingOptionsDto;
 
   @ApiProperty({ type: PingProbeDto })
+  @IsDefined()
   @ValidateNested()
   @Type(() => PingProbeDto)
   ping!: PingProbeDto;

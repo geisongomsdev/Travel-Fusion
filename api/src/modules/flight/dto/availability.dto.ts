@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
-  ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Length, Matches, Min,
+  ArrayMinSize, IsArray, IsBoolean, IsDefined, IsIn, IsInt, IsOptional, IsString, Length, Matches, Min,
   ValidateNested,
 } from 'class-validator';
 
@@ -74,6 +74,7 @@ export class AvailabilityDto {
   legs!: LegDto[];
 
   @ApiProperty({ type: PassengersDto })
+  @IsDefined()
   @ValidateNested()
   @Type(() => PassengersDto)
   passengers!: PassengersDto;
