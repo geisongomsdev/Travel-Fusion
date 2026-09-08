@@ -24,45 +24,59 @@ export function QuoteStep({ quote, selection, onContinue, onChangeParameter, par
           </Card>
         )}
 
-        {requiredParameters.map((parameter) => (
-          <Card key={parameter.name}>
+        {requiredParameters.length > 0 && (
+          <Card>
             <CardHeader>
-              <div className="flex items-center gap-2">
-                <CardTitle>{labelFor(parameter.name)}</CardTitle>
-                <Badge variant="outline">{parameter.perPassenger ? 'por passageiro' : 'por reserva'}</Badge>
-                {parameter.optional && <Badge variant="secondary">opcional</Badge>}
-              </div>
-              <CardDescription className="font-mono text-xs">{parameter.name}</CardDescription>
+              <CardTitle>O que o provedor vai exigir na reserva</CardTitle>
+              <CardDescription>
+                O ProcessTerms é ÚNICO: o que não for escolhido agora não tem segunda chance.
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-2">
-              {parameter.options.length === 0 && (
-                <p className="text-sm text-muted-foreground">{parameter.displayText || 'Sem opções parseáveis.'}</p>
-              )}
-              {parameter.options.map((option) => {
-                const selected = parameters[parameter.name] === option.value;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => onChangeParameter(parameter.name, selected ? null : option.value)}
-                    className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors ${
-                      selected ? 'border-primary bg-accent' : 'hover:bg-accent/50'
-                    }`}
-                  >
-                    <span>
-                      {option.quantity !== null && `${option.quantity} peça(s)`}
-                      {option.weightKg !== null && ` · ${option.weightKg}kg`}
-                      {option.quantity === null && option.weightKg === null && option.label}
-                    </span>
-                    <span className="font-medium">
-                      {option.price ? formatMoney(option.price.total, option.price.currency) : '—'}
-                    </span>
-                  </button>
-                );
-              })}
+            <CardContent className="divide-y divide-border">
+              {requiredParameters.map((parameter) => (
+                <div key={parameter.name} className="space-y-2 py-3 first:pt-0 last:pb-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium">{labelFor(parameter.name)}</span>
+                    <code className="font-mono text-[11px] text-muted-foreground">{parameter.name}</code>
+                    <Badge variant="outline">
+                      {parameter.perPassenger ? 'por passageiro' : 'por reserva'}
+                    </Badge>
+                    {parameter.optional && <Badge variant="secondary">opcional</Badge>}
+                  </div>
+                  {parameter.options.length === 0 && (
+                    <p className="text-sm text-muted-foreground">
+                      {parameter.displayText || 'Sem opções parseáveis.'}
+                    </p>
+                  )}
+                  {parameter.options.map((option) => {
+                    const selected = parameters[parameter.name] === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => onChangeParameter(parameter.name, selected ? null : option.value)}
+                        className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors ${
+                          selected
+                            ? 'border-primary bg-accent font-medium text-accent-foreground'
+                            : 'border-border hover:border-foreground/40 hover:bg-accent/40'
+                        }`}
+                      >
+                        <span>
+                          {option.quantity !== null && `${option.quantity} peça(s)`}
+                          {option.weightKg !== null && ` · ${option.weightKg}kg`}
+                          {option.quantity === null && option.weightKg === null && option.label}
+                        </span>
+                        <span className="font-medium">
+                          {option.price ? formatMoney(option.price.total, option.price.currency) : '—'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
             </CardContent>
           </Card>
-        ))}
+        )}
       </div>
 
       <Card className="h-fit">
@@ -82,7 +96,9 @@ export function QuoteStep({ quote, selection, onContinue, onChangeParameter, par
           <p className="text-xs text-muted-foreground">
             {selection?.leg?.origin?.code} → {selection?.leg?.destination?.code}
           </p>
-          <Button className="w-full" onClick={onContinue}>Reservar</Button>
+          <Button variant="brand" className="w-full sm:w-auto" onClick={onContinue}>
+            Reservar
+          </Button>
         </CardContent>
       </Card>
     </div>

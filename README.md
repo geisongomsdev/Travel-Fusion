@@ -1,77 +1,198 @@
-# Travel Fusion
+# Pass Flight API
 
-Integração da **Travelfusion Direct Connect XML API** com o contrato canônico de venda de passagens
-aéreas — 17 rotas REST/JSON, `/availability` em `text/event-stream`.
+Uma API que traduz **múltiplos provedores de passagem aérea** para o contrato canônico da Pass —
+17 rotas REST/JSON, com `/availability` em `text/event-stream`.
 
-A Travelfusion é um agregador que fala **XML puro via HTTP POST**, com fluxo de polling:
+Hoje fala com dois provedores, por caminhos completamente diferentes:
 
+| | Travelfusion | LATAM NDC |
+|---|---|---|
+| Protocolo | XML puro, envelope `<CommandList>` | XML IATA NDC 19.2 + 7 headers `X-latam-*` |
+| Autenticação | `Login` → `LoginId` eterno | OAuth2 client_credentials, token de 59 min |
+| Busca | `StartRouting` + polling incremental | `AirShopping` **síncrono** |
+| Reserva | `ProcessTerms` → `StartBooking` → `CheckBooking` | `OfferPrice` → `OrderCreate` → `OrderRetrieve` |
+| Cobertura | agregador, várias companhias | só LATAM |
+
+Por fora, os dois são indistinguíveis: mesma resposta, mesmo vocabulário, mesmo catálogo de erro.
+
+---
+
+## A fronteira de provedor
+
+Tudo acima de `FlightProvider` fala o contrato; tudo abaixo fala XML de fornecedor.
+
+```ts
+interface FlightProvider {
+  name: string;
+  supports: { fareRules: boolean; retrieve: boolean; multicity: boolean };
+  probe(ctx): Promise<ProviderProbe>;
+  search(request, ctx): AsyncGenerator<ProviderOffer[]>;   // lotes
+  quote(key, dto, ctx): Promise<ProviderQuote>;
+  book(key, dto, ctx): Promise<ProviderBooking>;
+  retrieve(locator, ctx): Promise<ProviderRetrieval>;
+  fareRules(key, dto, ctx): Promise<FareRuleSection[]>;
+}
 ```
-Login → StartRouting → CheckRouting → ProcessDetails → ProcessTerms → StartBooking → CheckBooking
-```
 
-Este repositório é a camada que traduz esse fluxo para o contrato, de modo que a integração fique
-indistinguível de qualquer outro provedor por fora.
+Duas decisões carregam o desenho:
+
+**`search` é async generator nos dois.** A Travelfusion entrega em pedaços (o `CheckRouting` é
+incremental — resultado já devolvido não volta) e a LATAM entrega de uma vez. Quem consome itera até
+acabar, sem saber qual é qual.
+
+**A oferta é `{ outbound, inbound }` — o par já fechado.** Os dois provedores *declaram* a
+combinabilidade: `RoutingId` na Travelfusion, `OfferID` + `PaxJourneyRefID` na LATAM. Modelar o
+pacote inteiro como uma coisa só torna impossível parear ida com volta por conta própria, que é a
+regra que reprova a integração (`04-availability-formatos.md §2`).
+
+`/availability` consulta **todos os provedores em paralelo** e emite um `provider_success` por
+provedor, na ordem em que respondem. Falha de um não derruba os outros — vira `provider_error` com o
+código do catálogo, e o stream segue.
 
 ---
 
 ## Rodando
 
 ```bash
-# API — Fastify, porta 3010, Swagger em /docs
 cd api
 npm install
-cp .env.example .env      # preencha TF_PASSWORD
-npm run dev
+cp .env.example .env
+npm run dev            # porta 3010, Swagger em /docs
+npm test               # 64 testes
 
-# Front — Vite + React + Tailwind + shadcn, porta 5173
-cd web
+cd ../web
 npm install
-npm run dev
+npm run dev            # porta 5173
 ```
 
-### Sem credencial válida
+### Credenciais
 
-As credenciais reais só respondem a partir de **IP whitelistado** — hoje a busca volta
-`4-3448 Login ID not found`. Para exercitar o fluxo inteiro sem elas existe um mock do endpoint XML:
+**LATAM** — self-service, sai em 2 minutos:
 
-```bash
-node api/tests/mock-travelfusion.js                                  # sobe o mock na 3999
-TF_ENDPOINT=http://localhost:3999/Xml TF_PASSWORD=mock npm run dev   # API contra o mock
-```
+1. Portal Apigee (`latamxp-sandboxdirectconnect.apigee.io`) → **Apps** → **+ NEW APP**
+2. Adicione a API `NDC v19.2 - Dev` → **Create**
+3. Copie **Key** e **Secret** para `LATAM_API_KEY` / `LATAM_API_SECRET`
 
-O mock reproduz o que importa do comportamento real: `CheckRouting` incremental, `Complete` só depois
-de algumas passadas, `RequiredParameterList` com o `DisplayText` de bagagem, e `CheckBooking`
-passando por `BookingInProgress` antes de `Succeeded`.
+Sem whitelist de IP. Aprovação da LATAM só é necessária para app de **produção**.
+
+🔴 **Key que gera token não é key que busca.** O `/oauth/cc/token` devolve `200` para qualquer app
+registrado, mas o gateway NDC recusa com `403122004 Forbidden User` os apps que não têm a API
+liberada. Um token válido não prova acesso — a prova é um `AirShopping` que volta `200`.
+
+Além da Key/Secret, **toda mensagem NDC carrega a identidade da agência**, e cada campo ausente tem
+seu próprio 403:
+
+| Variável | Sem ela | O que é |
+|---|---|---|
+| `LATAM_AGENCY_IATA` | `403122010` | O número IATA **da sua agência**. O `75996406` do guia do Postman é de uma agência de demonstração e não vale para a sua Key. |
+| `LATAM_TRAVEL_AGENT_ID` | `403122009 Missing Agent Info` | O e-mail do agente cadastrado. Vira `<TravelAgent><TravelAgentID>`. |
+| `LATAM_COUNTRY` | `403122003` | A praça onde a agência está cadastrada — e ela precisa bater com o `POS` da mensagem. Uma agência registrada em `BR` é recusada com `POS: CL`. |
+
+`LATAM_AGENCY_ID` entra na mensagem mas o sandbox **não valida** o valor.
+
+**Travelfusion** — o Welcome Pack entrega três contas diferentes, e trocá-las devolve
+`4-3900 Invalid credentials`. A do `.env` é a da linha **"API account"**, não a do portal Reports nem
+a do IBE. Seis senhas erradas seguidas **desativam** o usuário, por isso o `getLoginId` tem cache
+negativo: a primeira recusa é memorizada e as chamadas seguintes falham sem sair para a rede.
+
+`PROVIDERS=latam,travelfusion` define quem está no ar e a ordem — o primeiro é o padrão de quem não
+escolhe. Tirar um dali o desliga sem deploy.
+
+### Sem credencial
+
+A API responde `401 PROVIDER_AUTHENTICATION_FAILED` **antes de sair para a rede**, com a instrução no
+corpo. Não existe modo mock: o duble do NDC vive em `api/test/fixtures/` e só o teste de integração o
+alcança, injetado por construtor. Um duble alcançável pela configuração de runtime vira produção por
+acidente.
+
+---
+
+## O que a doc da LATAM não conta
+
+Tudo abaixo foi descoberto sondando o sandbox, um erro de cada vez. Está aqui porque cada item custou
+uma rodada de tentativa e erro, e o erro que o gateway devolve raramente aponta o campo culpado.
+
+**O token exige `x-api-key` além do Basic Auth.** Só com `-u key:secret` o `/oauth/cc/token` responde
+`401 Invalid credentials` — o que parece credencial errada e não é.
+
+**`offerPrice` é camelCase; o resto é minúsculo.** `/ndc/v192/offerprice` responde
+`404 Invalid url or Method Not Allowed`. O YAML publicado não lista essa rota. As demais
+(`/airshopping`, `/order/create`, `/order/retrieve`, `/order/cancel`) são todas minúsculas.
+
+**O XSD cobra campos que a doc não destaca**, e a mensagem de erro cita o elemento *seguinte* ao que
+faltou:
+
+| Mensagem | Falta | Erro |
+|---|---|---|
+| `OfferPrice` | `OwnerCode` depois do `OfferRefID` | `cvc-complex-type.2.4.a` |
+| `OfferPrice` | `DataLists/PaxList` de volta | `cvc-identity-constraint.4.3: Key 'PaxIDKeyRef4' not found` |
+| `OrderCreate` | `OwnerCode`, `Individual/IndividualID` | `400113025` |
+| `OrderRetrieve` | `Order` dentro de `OrderFilterCriteria` | `911` |
+
+**A ordem dos elementos é alfabética, e é obrigatória.** Em `Pax`: `ContactInfoRefID`, `IdentityDoc`,
+`Individual`, `PaxID`, `PTC` — e dentro de `Individual`, `Birthdate` antes de `GivenName`. Fora dessa
+sequência o gateway recusa sem dizer qual campo está no lugar errado.
+
+Por isso o duble em `api/test/fixtures/latam-ndc-double.mjs` é chato de propósito: ele repete essas
+validações. Cada regra ali veio de um 400/403 real, e é o que faz `latam.integration.spec.ts` pegar a
+regressão antes do sandbox.
 
 ---
 
 ## Estrutura
 
 ```
-api/
-  src/
-    config/          endpoint, credenciais, timeouts por comando
-    constants/       catálogo de erro (18 códigos), capabilities
-    domain/          AppError, dinheiro
-    application/     use-cases: busca, quote, reserva
-    integrations/
-      travelfusion/
-        provider/    transporte XML, Login+cache, comandos, mapa de erro
-        normalizers/ rota → contrato, bagagem
-    interfaces/http/ app, rotas, schemas do Swagger, presenters
-  tests/             unitários + mock do provedor
-web/
-  src/
-    components/ui/   shadcn (button, card, input, label, badge, steps)
-    steps/           busca → resultados → tarifar → reservar
-    lib/             cliente HTTP e leitor de SSE
-docs/
-  decisoes.md        onde o contrato e a Travelfusion não se encaixam
+api/src/
+  common/
+    errors/          AppError + catálogo do contrato (18 códigos)
+    xml/             travessia tipada de XML (XmlElement, child, attr)
+    utils/           dinheiro, chave opaca de oferta, idade na data do voo
+  config/            env, timeouts por comando, credenciais
+  modules/
+    flight/          a camada do CONTRATO — controller, DTOs, casos de uso
+    providers/
+      provider.types.ts     a fronteira
+      provider.registry.ts  quem atende esta requisição
+      latam/                client OAuth2, comandos NDC, normalizador
+      travelfusion/         client XML, comandos, normalizadores
+api/test/
+  contract.spec.ts           invariantes do contrato
+  latam.spec.ts              normalizador contra a amostra REAL do portal (433KB)
+  latam.integration.spec.ts  provider inteiro contra o duble
+web/src/
+  components/ui/     primitivos com a identidade do portal LATAM (Roboto, índigo #1B0188)
+  steps/             busca → escolher → tarifar → reservar
 ```
 
-A pasta `integrations/travelfusion/provider/` espelha a convenção de
-`queue-booking.pass-connect/flight/src/integrations/<provider>/provider/`, para que a migração
-depois seja mover pasta, não reescrever.
+O `xml.util` vive em `common/` porque os dois provedores o usam — dentro de um deles, a dependência
+apontaria na direção errada.
+
+---
+
+## O front
+
+Uma tela só, que percorre o fluxo inteiro e mostra o contrato acontecendo: o painel de eventos ao
+lado da busca exibe cada quadro do SSE na ordem em que chega, que é onde a diferença entre um
+provedor síncrono e um de polling fica visível.
+
+A identidade visual vem do próprio **portal Sandbox Direct Connect** — os tokens foram lidos da
+página, não estimados:
+
+| | |
+|---|---|
+| Índigo estrutural | `#1B0188` — toolbar, rodapé, passo concluído, botão secundário |
+| Vermelho da marca | `#E8114B` — só na ação que avança o fluxo (buscar, tarifar, reservar) |
+| Fundo / texto | `#FAFAFA` / `rgba(0,0,0,.87)` |
+| Tipografia | Roboto 300/400/500/700 |
+| Cartão | branco, raio 4px, elevação 1 do Material (`.elevation-1`) |
+
+Tudo passa por variável CSS em `web/src/index.css`; nenhum componente carrega hex solto. Trocar a
+paleta é trocar aquele bloco.
+
+**Uma decisão de exibição vale nota:** a LATAM devolve uma oferta por família tarifária, então o
+mesmo voo chega repetido — a busca GRU→SCL traz 422 tarifas para 94 voos. Listar cru viraria cinco
+cartões idênticos com preços diferentes. `ResultsStep` agrupa por voo e deixa as famílias como
+escolha dentro do cartão; o `identifier` continua sendo o da família escolhida, nunca remontado.
 
 ---
 
@@ -80,26 +201,37 @@ depois seja mover pasta, não reescrever.
 | | |
 |---|---|
 | Implementado | `/availability` (stream), `/quote`, `/booking`, `/retrieve`, `/fare-rules`, `/ping` |
-| **501** por limitação do provedor | assentos, ancillaries avulsos, pagamento, emissão, e-ticket, cancelamento |
-| Falta para o go-live | `ListSupplierRoutes` ligado à busca, 3D Secure |
+| **501** declarado | assentos, ancillaries avulsos, pagamento, emissão, e-ticket, cancelamento |
+| Bloqueio Travelfusion | IP não whitelistado — `Login` passa, comando seguinte volta `4-3448` |
+| LATAM | **funcionando ponta a ponta** contra o sandbox |
 
-A mais importante das decisões: a Travelfusion **não separa reservar de emitir** — o `StartBooking`
-já cobra, então `/issue` é 501.
+O fluxo completo foi percorrido contra o sandbox real da LATAM: busca GRU→SCL (422 tarifas),
+tarifação, reserva (localizador `LA9579666ZURB`, `status: OPENED`) e recuperação da ordem com
+passageiro, documento e nascimento de volta. As rotas `501` respondem `CAPABILITY_NOT_SUPPORTED`,
+como declarado.
+
+Duas capacidades são **501 por honestidade**, não por preguiça: a Travelfusion não separa reservar de
+emitir (o `StartBooking` já cobra, então `/issue` é 501), e a LATAM devolve penalidade estruturada em
+vez do texto integral da tarifa — publicar aquilo como "condições" seria dizer que é o que não é.
 
 | Documento | Assunto |
 |---|---|
-| [`docs/entrega.md`](docs/entrega.md) | O que foi construído, o que foi além do mínimo e as pendências |
-| [`docs/mapeamento.md`](docs/mapeamento.md) | Rota do contrato ↔ comando Travelfusion, timeouts, mapa de erro |
-| [`docs/arquitetura.md`](docs/arquitetura.md) | As camadas, onde cada decisão mora, o que falta |
-| [`docs/decisoes.md`](docs/decisoes.md) | Onde o contrato e o provedor não se encaixam |
+| [`docs/stack.md`](docs/stack.md) | A stack NestJS/TS e o que ela resolve estruturalmente |
+| [`docs/entrega.md`](docs/entrega.md) | O que foi construído, o que foi além do mínimo, pendências |
+| [`docs/mapeamento.md`](docs/mapeamento.md) | Rota do contrato ↔ comando do provedor, timeouts, mapa de erro |
+| [`docs/arquitetura.md`](docs/arquitetura.md) | As camadas e onde cada decisão mora |
+| [`docs/decisoes.md`](docs/decisoes.md) | Onde o contrato e os provedores não se encaixam |
 
 ---
 
 ## Documentação de origem
 
-| Pasta | Conteúdo |
-|---|---|
-| `docs-api/` | A especificação do contrato — 17 rotas, convenções, catálogo de erros |
-| `Travel Fusion/` | Documentação do provedor (spec XML, welcome pack, onboarding) |
+| Pasta | Conteúdo | Versionada |
+|---|---|---|
+| `docs-api/` | A especificação do contrato — 17 rotas, convenções, erros | sim |
+| `docs-api/latam/` | Portal NDC da LATAM (54 docs, 233 payloads) | **não** |
+| `Travel Fusion/` | Spec XML, welcome pack, onboarding | **não** |
 
-> ⚠️ `Travel Fusion/` contém **credenciais reais** e está no `.gitignore`. Não versionar.
+> ⚠️ As duas pastas de provedor ficam fora do repositório: contêm material do fornecedor e
+> credenciais reais. `api/test/latam.spec.ts` usa uma amostra de `docs-api/latam/` e **pula sozinho**
+> quando ela não está presente, então a suíte continua verde num clone limpo.

@@ -54,7 +54,7 @@ export function BookingStep({ onBook, running, booking }) {
             A idade vai para o provedor calculada na data do voo — em ida-e-volta, na data da volta.
           </p>
           <div className="sm:col-span-2">
-            <Button type="submit" disabled={running} className="w-full">
+            <Button type="submit" variant="brand" disabled={running} className="w-full sm:w-auto">
               {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ticket className="h-4 w-4" />}
               {running ? 'Reservando…' : 'Reservar'}
             </Button>
@@ -96,14 +96,14 @@ function BookingResult({ booking }) {
         </div>
 
         {pending && (
-          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
+          <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
             A reserva foi aceita mas ainda não confirmou. Aguarde — o polling continua.
             <span className="font-medium"> Não reserve de novo:</span> ela pode já existir do lado do fornecedor.
           </div>
         )}
 
         {booking.confirmed && (
-          <div className="rounded-md border border-emerald-600/30 bg-emerald-600/5 p-3 text-sm">
+          <div className="rounded-md border border-success/40 bg-success/10 p-3 text-sm">
             Reserva confirmada. A emissão (<code className="text-xs">/issue</code>) responde 501 neste provedor:
             na Travelfusion o <code className="text-xs">StartBooking</code> já cobra, então não existe emissão separada.
           </div>

@@ -24,8 +24,7 @@ As 17 rotas do contrato e o que cada uma faz no provedor.
 | `POST /payment-options` | A Travelfusion não expõe catálogo de formas de pagamento por oferta |
 | `POST /financing-options` | Não expõe parcelamento |
 | `POST /issue` | **Não existe emissão separada** — o `StartBooking` já cobra |
-| `POST /retrieve-eticket` · `POST /cancel-eticket` | O agregador devolve a referência do fornecedor, não o bilhete. Cancelamento passa por `bsm@travelfusion.com` |
-| `POST /cancel-booking` | Varia por fornecedor; sem suporte uniforme |
+| `POST /retrieve-eticket` · `POST /cancel-eticket` · `POST /cancel-booking` | ⚠️ **Correção:** não é limitação do provedor. A Travelfusion tem uma **Post Booking API** com spec separada (Welcome Pack v1.9), mais a plataforma *Manage Your Booking*, cujas credenciais só chegam com a autorização de go-live e não operam sobre fake bookings. É dívida nossa, não capability ausente |
 
 ---
 
