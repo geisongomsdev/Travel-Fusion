@@ -93,7 +93,7 @@ function FlightCard({ flight, onSelect }) {
   const { leg } = flight;
 
   return (
-    <Card className="transition-shadow hover:shadow-card-hover">
+    <Card className="transition-colors hover:bg-muted/40">
       <CardContent className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent text-accent-foreground">
@@ -121,7 +121,7 @@ function FlightCard({ flight, onSelect }) {
             </p>
             <p className="text-xs text-muted-foreground">total da reserva</p>
           </div>
-          <Button size="sm" variant="brand" onClick={() => onSelect(option.leg, option.fare)}>
+          <Button size="sm"  onClick={() => onSelect(option.leg, option.fare)}>
             Tarifar
           </Button>
         </div>

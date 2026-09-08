@@ -19,15 +19,15 @@ function WarningSign({ className }) {
 }
 
 const TONES = {
-  advice: 'border-l-warning bg-warning/[0.07]',
-  note: 'border-l-primary bg-accent/60',
-  error: 'border-l-destructive bg-destructive/[0.06]',
-  success: 'border-l-success bg-success/[0.07]',
+  advice: 'border-amber-500/25 bg-amber-500/5',
+  note: 'border-border bg-muted/50',
+  error: 'border-destructive/25 bg-destructive/5',
+  success: 'border-emerald-500/25 bg-emerald-500/5',
 };
 
 export function Callout({ tone = 'note', title, children, className }) {
   return (
-    <div className={cn('rounded-r-lg border-l-[3px] px-4 py-3', TONES[tone], className)}>
+    <div className={cn('rounded-lg border px-3.5 py-2.5', TONES[tone], className)}>
       <div className="flex gap-3">
         {tone === 'advice' && <WarningSign className="mt-0.5 h-5 w-5 shrink-0" />}
         <div className="min-w-0 flex-1 text-sm leading-relaxed">

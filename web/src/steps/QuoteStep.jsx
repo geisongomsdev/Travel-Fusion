@@ -143,7 +143,7 @@ export function QuoteStep({ quote, selection, onContinue, onChangeParameter, par
           <div className="border-t border-border pt-3">
             <Row label="Total" value={formatMoney(price?.total, price?.currency)} strong />
           </div>
-          <Button variant="brand" size="lg" className="w-full" onClick={onContinue}>
+          <Button size="lg" className="w-full" onClick={onContinue}>
             Reservar
           </Button>
           <CodeBlock code={JSON.stringify(price, null, 2)} language="json" title="price" maxHeight="13rem" />

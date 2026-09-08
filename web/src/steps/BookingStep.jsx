@@ -63,7 +63,7 @@ export function BookingStep({ onBook, running, booking }) {
             </div>
 
             <div className="sm:col-span-2">
-              <Button type="submit" variant="brand" size="lg" disabled={running} className="w-full sm:w-auto">
+              <Button type="submit" size="lg" disabled={running} className="w-full sm:w-auto">
                 {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ticket className="h-4 w-4" />}
                 {running ? 'Reservando…' : 'Reservar'}
               </Button>

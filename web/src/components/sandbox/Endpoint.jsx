@@ -5,18 +5,18 @@ import { cn } from '@/lib/utils';
  * o método e a URL em destaque, monoespaçado, antes de qualquer explicação.
  */
 const METHOD_TONE = {
-  POST: 'bg-success text-white',
-  GET: 'bg-primary text-primary-foreground',
-  DELETE: 'bg-destructive text-destructive-foreground',
+  POST: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600',
+  GET: 'border-sky-500/20 bg-sky-500/10 text-sky-600',
+  DELETE: 'border-destructive/20 bg-destructive/10 text-destructive',
 };
 
 export function Endpoint({ method = 'POST', path, note, className }) {
   return (
-    <div className={cn('rounded-lg border border-border bg-muted/60 px-3 py-2.5', className)}>
+    <div className={cn('rounded-lg bg-primary/5 px-3 py-2.5', className)}>
       <div className="flex flex-wrap items-center gap-2">
         <span
           className={cn(
-            'rounded px-2 py-0.5 font-mono text-[11px] font-bold tracking-wide',
+            'rounded-md border px-2 py-0.5 font-mono text-[11px] font-medium',
             METHOD_TONE[method] ?? METHOD_TONE.POST,
           )}
         >

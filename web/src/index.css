@@ -3,49 +3,47 @@
 @tailwind utilities;
 
 /**
- * Vocabulário visual das páginas do Sandbox Direct Connect
- * (`docs-api/latam/latam/`). Quatro componentes se repetem em toda operação:
+ * Tokens do design system da Pass (`Pass_projects/sandbox`).
  *
- *   1. bloco de código escuro com XML colorido  → assets/aishopping-…png
- *   2. tabela de campos (Field Name | Type | Accepted Values | Required)
- *   3. faixa de "URL Endpoint"
- *   4. callouts de Advice (⚠) e Note
+ * A paleta é NEUTRA: `--primary` é quase preto (oklch 0.205 → 0 0% 9%), não uma
+ * cor de marca. Cor no chrome é ruído; quem colore a tela é o dado — status,
+ * erro, aviso. Foi exatamente isso que a versão anterior errou, pintando barra,
+ * cabeçalho de cartão e rodapé de índigo.
  *
- * A cor institucional é a do site da LATAM (#10004F), não a do template Apigee.
- * Ela fica na barra superior e no texto de título — nunca como faixa em cima de
- * cada cartão, que foi o erro da primeira versão.
+ * Os valores abaixo são os mesmos do `globals.css` de lá, convertidos de oklch
+ * para tripla HSL porque este projeto é Tailwind v3 — e a tripla é o que
+ * permite o modificador de opacidade (`bg-primary/5`), que o design flat usa o
+ * tempo inteiro.
  */
 @layer base {
   :root {
-    --background: 240 20% 97%;
-    --foreground: 0 0% 19%;          /* #303030, o texto do site da LATAM */
+    --background: 0 0% 100%;
+    --surface: 0 0% 97%;
+    --foreground: 0 0% 3.9%;
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 19%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 93%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 0 0% 63.9%;
+    --radius: 0.625rem;
 
-    --primary: 254 100% 15%;         /* #10004F */
-    --primary-foreground: 0 0% 100%;
-
-    --brand: 344 86% 49%;            /* #E8114B, só na ação que avança */
-    --brand-foreground: 0 0% 100%;
-
-    --secondary: 240 14% 95%;
-    --secondary-foreground: 0 0% 19%;
-    --muted: 240 14% 96%;
-    --muted-foreground: 0 0% 42%;
-    --accent: 254 60% 96%;
-    --accent-foreground: 254 100% 15%;
-    --destructive: 0 72% 45%;
-    --destructive-foreground: 0 0% 100%;
-    --success: 158 74% 30%;
-    --warning: 45 96% 47%;           /* o amarelo do warning-sign do portal */
-    --border: 240 10% 88%;
-    --input: 240 8% 78%;
-    --ring: 254 100% 15%;
-
-    /* Botão da LATAM é pílula, não retângulo de 4px. */
-    --radius: 0.5rem;
-
-    /* Tema do bloco de código, lido do print em assets/. Material Oceanic. */
+    /**
+     * Tema do bloco de código, lido do print em
+     * `docs-api/latam/latam/assets/aishopping-…png`. É o único lugar da tela
+     * que foge da paleta neutra, e com motivo: é o payload, não o chrome.
+     */
     --code-bg: #263238;
     --code-fg: #b2ccd6;
     --code-tag: #f07178;
@@ -57,40 +55,53 @@
   }
 
   .dark {
-    --background: 254 30% 8%;
-    --foreground: 0 0% 94%;
-    --card: 254 25% 12%;
-    --card-foreground: 0 0% 94%;
-    --primary: 254 60% 75%;
-    --primary-foreground: 254 100% 12%;
-    --brand: 344 86% 58%;
-    --brand-foreground: 0 0% 100%;
-    --secondary: 254 20% 20%;
-    --secondary-foreground: 0 0% 94%;
-    --muted: 254 20% 18%;
-    --muted-foreground: 0 0% 68%;
-    --accent: 254 25% 22%;
-    --accent-foreground: 0 0% 94%;
-    --destructive: 0 62% 52%;
-    --destructive-foreground: 0 0% 100%;
-    --success: 158 60% 45%;
-    --warning: 45 90% 55%;
-    --border: 254 15% 26%;
-    --input: 254 15% 32%;
-    --ring: 254 60% 75%;
+    --background: 0 0% 3.9%;
+    --surface: 0 0% 8%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 5%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 5%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 14.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 0 0% 14.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 50%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 14.9%;
+    --input: 0 0% 20%;
+    --ring: 0 0% 45%;
   }
 
   * { @apply border-border; }
 
   body {
     @apply bg-background text-foreground antialiased;
-    /* A fonte do site da LATAM. Trebuchet é o fallback que a própria LATAM usa. */
-    font-family: 'LATAM Sans', 'Trebuchet MS', ui-sans-serif, system-ui, sans-serif;
+    font-family: Geist, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   }
 }
 
 @layer utilities {
-  /* Sombra discreta de cartão. A separação vem da borda; a sombra só assenta. */
-  .shadow-card { box-shadow: 0 1px 2px rgb(16 0 79 / 0.06), 0 1px 3px rgb(16 0 79 / 0.04); }
-  .shadow-card-hover { box-shadow: 0 4px 12px rgb(16 0 79 / 0.10), 0 2px 4px rgb(16 0 79 / 0.06); }
+  /** `shadow-xs` do Tailwind v4, que os primitivos de lá usam e o v3 não tem. */
+  .shadow-xs { box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
+
+  /**
+   * `--shadow-custom` do design system: a borda de 1px É a sombra, mais duas
+   * camadas rasas. Usado nos painéis que precisam destacar do fundo.
+   */
+  .shadow-custom {
+    box-shadow:
+      0 0 0 1px rgb(0 0 0 / 0.08),
+      0 2px 2px rgb(0 0 0 / 0.04),
+      0 8px 16px -4px rgb(0 0 0 / 0.04);
+  }
+
+  /** Tratamento de ícone do toolbar: traço fino e esmaecido. */
+  .toolbar-icons {
+    & svg { stroke-width: 1.5; opacity: 0.5; }
+  }
 }

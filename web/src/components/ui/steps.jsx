@@ -19,8 +19,8 @@ export function Steps({ steps, current }) {
             <span
               className={cn(
                 'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-medium transition-colors',
-                done && 'border-primary bg-primary text-primary-foreground',
-                active && 'border-brand bg-brand text-brand-foreground',
+                done && 'border-primary/30 bg-primary/10 text-foreground',
+                active && 'border-primary bg-primary text-primary-foreground',
                 !done && !active && 'border-border bg-card text-muted-foreground',
               )}
             >
@@ -38,7 +38,7 @@ export function Steps({ steps, current }) {
             </span>
             {index < steps.length - 1 && (
               <span
-                className={cn('mx-2 h-0.5 w-8 rounded-full transition-colors', done ? 'bg-primary' : 'bg-border')}
+                className={cn('mx-2 h-0.5 w-8 rounded-full transition-colors', done ? 'bg-primary/30' : 'bg-border')}
                 aria-hidden
               />
             )}

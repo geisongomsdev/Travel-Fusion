@@ -160,8 +160,9 @@ api/test/
   latam.spec.ts              normalizador contra a amostra REAL do portal (433KB)
   latam.integration.spec.ts  provider inteiro contra o duble
 web/src/
-  components/sandbox/  CodeBlock, FieldTable, Callout, Endpoint — os componentes das páginas do portal
-  components/ui/       primitivos (botão-pílula, cartão, campo) sobre os tokens da LATAM
+  components/toolbar/  o toolbar flat do design system da Pass (chips, ícones 1.5)
+  components/sandbox/  CodeBlock, FieldTable, Callout, Endpoint — das páginas de operação do portal
+  components/ui/       button, input, select, badge, card com as classes do design system
   steps/             busca → escolher → tarifar → reservar
 ```
 
@@ -174,27 +175,26 @@ apontaria na direção errada.
 
 Uma tela só, que percorre o fluxo inteiro e mostra o contrato acontecendo.
 
-O vocabulário visual é o das **páginas de operação do sandbox** (`docs-api/latam/latam/`) — quatro
-componentes que se repetem em toda operação, reproduzidos em `web/src/components/sandbox/`:
+Os componentes vêm do **design system da Pass** (`Pass_projects/sandbox`), não de um tema genérico:
 
-| Componente | De onde veio | Onde aparece |
-|---|---|---|
-| `CodeBlock` | o print em `assets/aishopping-airshoppingrs-base-…png` — Material Oceanic sobre `#263238` | AirShoppingRQ, resposta do `/booking`, erro do provedor |
-| `FieldTable` | a tabela `Field Name / Type / Accepted Values / Required` de `operations/*.md` | os `requiredParameters` que o `/quote` declara |
-| `Callout` | os blocos `### Advice` (com o triângulo de `assets/warning-sign-…jpg`) e `**Note:**` | idempotência do OrderCreate, ordem do XSD, multi-pax |
-| `Endpoint` | a faixa `### URL Endpoint` que abre cada operação | topo de cada passo |
+| | |
+|---|---|
+| Paleta | **neutra** — `--primary` é quase preto (oklch 0.205). Cor no chrome é ruído; quem colore a tela é o dado |
+| Fonte | Geist / Geist Mono |
+| Raio | `--radius: 0.625rem`, com a escala `sm/md/lg/xl` derivada dele |
+| Primitivos | `button`, `input`, `badge`, `card` e o trigger do `select` com as classes de `sandbox/src/components/ui/` |
+| Barra | o padrão **flat** do `TravelsToolbar`: a barra some (sem borda, sem sombra) e cada controle vira um chip `bg-primary/5`, hover `bg-primary/10` |
+| Ícones | traço 1.5 e `text-muted-foreground opacity-50` — o tratamento de `data-toolbar-styles.ts` |
+| Status | pílula `bg-<cor>-500/10 text-<cor>-600 border-<cor>-500/20`, como no `ServiceDetailModal` |
 
-O realce de sintaxe é regex própria: são só XML e JSON, e uma biblioteca de highlight custaria mais
-bytes que o resto do bundle junto.
+Os tokens do toolbar ficam em `web/src/components/toolbar/toolbar-styles.js`, portados um a um — no
+projeto original eles existem justamente para "chip" ser uma decisão só, em um arquivo só.
 
-A cor institucional é a do site da LATAM (`#10004F`), não a do template Apigee, e o botão é **pílula
-com peso 600** como o deles — não retângulo de 4px em caixa alta.
-
-🔴 **O que não fazer:** a primeira versão desta tela usou o `home-page-card-header` do portal — a
-faixa índigo sólida — como padrão de todo `CardHeader`. Aquilo é o cabeçalho de três cartõezinhos de
-navegação da home; como padrão vira uma barra pesada em cima de cada formulário, empilhada com o
-toolbar e a faixa de título. A hierarquia aqui é tipográfica, que é como as páginas de operação
-realmente se organizam.
+A exceção deliberada à paleta neutra é o **bloco de código** (`components/sandbox/CodeBlock`), que
+mantém o tema escuro do print em `docs-api/latam/latam/assets/aishopping-…png`. Ali é payload, não
+chrome. Junto dele ficam os outros três componentes das páginas de operação do sandbox de docs:
+`FieldTable` (a tabela `Field Name / Type / Accepted Values / Required`), `Callout` (`### Advice` com
+o triângulo de `assets/warning-sign`, e `**Note:**`) e `Endpoint` (a faixa `### URL Endpoint`).
 
 **Uma decisão de exibição vale nota:** a LATAM devolve uma oferta por família tarifária, então o
 mesmo voo chega repetido — a busca GRU→SCL traz 422 tarifas para 94 voos. Listar cru viraria cinco
