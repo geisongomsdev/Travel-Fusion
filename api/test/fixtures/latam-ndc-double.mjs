@@ -303,12 +303,40 @@ const server = http.createServer((req, res) => {
       res.end(payload);
     };
 
+    /**
+     * O que o gateway real cobra do XSD, replicado aqui: cada regra abaixo veio
+     * de um 400/403 do sandbox, e sem ela a mensagem NAO passa la. Este duble e
+     * chato de proposito — e o que faz o teste de fiacao pegar a regressao.
+     */
+    const schemaError = (detail) =>
+      '<?xml version="1.0" encoding="UTF-8"?><Response><Error><Code>914</Code><DescText>'
+      + detail + '</DescText></Error></Response>';
+
+    // 403122009 Missing Agent Info: vale para TODAS as mensagens.
+    if (!/<TravelAgentID>/.test(body)) return xml(schemaError('Missing Agent Info'));
+
     if (url.endsWith('/airshopping')) {
       // Rota fora da malha devolve o erro, para exercitar o mapa.
       return xml(/XXX/.test(body) ? routeNotSold : AIR_SHOPPING);
     }
-    if (url.endsWith('/offerprice')) return xml(OFFER_PRICE);
-    if (url.endsWith('/order/create') || url.endsWith('/order/retrieve')) return xml(ORDER_VIEW);
+
+    // camelCase, como no gateway real: /offerprice responde 404 la.
+    if (url.endsWith('/offerPrice')) {
+      if (!/<OwnerCode>/.test(body)) return xml(schemaError('OwnerCode is expected'));
+      if (!/<PaxList>/.test(body)) return xml(schemaError("Key 'PaxIDKeyRef4' not found"));
+      return xml(OFFER_PRICE);
+    }
+
+    if (url.endsWith('/order/create')) {
+      if (!/<OwnerCode>/.test(body)) return xml(schemaError('OwnerCode is expected'));
+      if (!/<IndividualID>/.test(body)) return xml(schemaError('no value for the key IndividualIDKey'));
+      return xml(ORDER_VIEW);
+    }
+
+    if (url.endsWith('/order/retrieve')) {
+      if (!/<OrderFilterCriteria>/.test(body)) return xml(schemaError('OrderFilterCriteria is expected'));
+      return xml(ORDER_VIEW);
+    }
 
     res.writeHead(404, { 'Content-Type': 'application/xml' });
     res.end('<Error><Code>404000001</Code><DescText>Not found</DescText></Error>');

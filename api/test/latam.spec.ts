@@ -120,7 +120,7 @@ describeIfSample('AirShopping real da LATAM', () => {
   beforeAll(async () => {
     const parsed = await parseXml(readFileSync(SAMPLE, 'utf8'));
     const payload = (Object.values(parsed)[0] as any).Response;
-    offers = normalizeAirShopping(payload, 4);
+    offers = normalizeAirShopping(payload, 4, ['ADT_1', 'ADT_2', 'ADT_3', 'ADT_4']);
   });
 
   it('extrai as ofertas do OffersGroup', () => {
