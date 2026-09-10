@@ -113,6 +113,7 @@ export interface FlightProvider {
     fareRules: boolean;
     retrieve: boolean;
     multicity: boolean;
+    cancelBooking: boolean;
   };
 
   probe(context: RequestContext): Promise<ProviderProbe>;
@@ -126,6 +127,22 @@ export interface FlightProvider {
   retrieve(locator: string, context: RequestContext): Promise<ProviderRetrieval>;
 
   fareRules(key: OfferKey, dto: FareRulesDto, context: RequestContext): Promise<FareRuleSection[]>;
+
+  /**
+   * Cancelar a reserva. OPCIONAL: só existe em provedor que declara
+   * `supports.cancelBooking`, e o contrato responde 501 nos demais.
+   */
+  cancelBooking?(locator: string, context: RequestContext): Promise<ProviderCancellation>;
+}
+
+/** O que o contrato precisa saber de um cancelamento. */
+export interface ProviderCancellation {
+  locator: string;
+  /** 🔴 `cancelled` só quando a companhia confirma. Pendente NÃO é cancelado. */
+  status: 'cancelled' | 'pending';
+  rawStatus: string | null;
+  /** Quanto a companhia declarou que devolve. `null` = ela não disse. */
+  refund: { total: number; currency: string | null } | null;
 }
 
 export const FLIGHT_PROVIDERS = Symbol('FLIGHT_PROVIDERS');

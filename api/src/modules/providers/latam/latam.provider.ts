@@ -5,10 +5,10 @@ import { passengerTypeCode } from '../../../common/utils/age';
 import { OfferKey } from '../../../common/utils/offer-key';
 import { LATAM } from '../../../config/env';
 import { AvailabilityDto } from '../../flight/dto/availability.dto';
-import { CreateBookingDto, FareRulesDto, QuoteDto } from '../../flight/dto/booking.dto';
+import { CreateBookingDto, QuoteDto } from '../../flight/dto/booking.dto';
 import {
   FareRuleSection, FlightProvider, ProviderBooking, ProviderOffer, ProviderProbe, ProviderQuote,
-  ProviderRetrieval, RequestContext,
+  ProviderCancellation, ProviderRetrieval, RequestContext,
 } from '../provider.types';
 import { asList, attr, child, num, text, XmlValue } from '../../../common/xml/xml.util';
 import { buildPaxList, LatamCommands } from './latam.commands';
@@ -39,6 +39,8 @@ export class LatamProvider implements FlightProvider {
     fareRules: false,
     retrieve: true,
     multicity: true,
+    // OrderReshop calcula o reembolso, OrderCancel executa. As duas rotas existem.
+    cancelBooking: true,
   };
 
   constructor(private readonly commands: LatamCommands) {}
@@ -68,8 +70,18 @@ export class LatamProvider implements FlightProvider {
       babies: request.passengers.babies ?? 0,
     };
 
+    /**
+     * 🔴 A cabine NÃO vai para o AirShopping, e isso é medido, não preferência:
+     * com `PreferredCabinType C` a LATAM devolve 0 ofertas na mesma busca em
+     * que, sem o filtro, devolve 424 — 12 delas business. Mandar o critério
+     * para cima esconde oferta que existe.
+     *
+     * O filtro de cabine acontece na camada do contrato
+     * (`AvailabilityService.applyOptionFilters`), que vê a tarifa já normalizada
+     * e vale igual para os dois provedores.
+     */
     const { payload } = await this.commands.airShopping(
-      { legs: request.legs, passengers, cabin: request.options?.class ?? null },
+      { legs: request.legs, passengers, cabin: null },
       context,
     );
 
@@ -199,6 +211,80 @@ export class LatamProvider implements FlightProvider {
 
     const { payload } = await this.commands.orderCreate(key.r, key.i ?? null, paxList, contacts, context);
     return this.readOrder(payload, 'createBooking');
+  }
+
+  /**
+   * Cancelar é DOIS passos na LATAM, e o primeiro não é opcional.
+   *
+   * 🔴 `OrderReshop` calcula quanto volta, e o `OrderCancel` exige esse valor em
+   * `ExpectedRefundAmount`. É o jeito da companhia garantir que quem cancela
+   * concorda com o reembolso — mandar um número inventado é pedir para a ordem
+   * ser recusada, ou pior, aceita com um valor que ninguém conferiu.
+   *
+   * O reshop é read-only: se ele falhar, nada foi cancelado.
+   */
+  async cancelBooking(locator: string, context: RequestContext): Promise<ProviderCancellation> {
+    const { payload: quote } = await this.commands.orderReshop(locator, context);
+
+    const refund = this.readRefund(quote);
+    if (refund === null) {
+      /**
+       * Sem valor não dá para seguir: o OrderCancel não aceita a mensagem sem
+       * `ExpectedRefundAmount`, e chutar zero cancelaria abrindo mão do
+       * reembolso. Melhor parar e devolver o motivo.
+       */
+      throw new AppError('PROVIDER_INTEGRATION_ERROR', {
+        metadata: { operation: 'cancelBooking' },
+        providerError: {
+          provider: LATAM,
+          operation: 'OrderReshop',
+          providerCode: 'NO_REFUND_QUOTE',
+          providerMessage: 'O OrderReshop não devolveu valor de reembolso; cancelamento não foi tentado.',
+          providerSeverity: null,
+          httpStatus: null,
+        },
+      });
+    }
+
+    const { payload } = await this.commands.orderCancel(locator, refund.total, context);
+
+    const status = (text(child(payload, 'Order', 'StatusCode'))
+      ?? text(child(payload, 'Order', 'OrderStatusCode'))
+      ?? '').toUpperCase();
+
+    return {
+      locator,
+      // Só os status finais de falha significam cancelado de verdade.
+      status: FAILED_STATUSES.has(status) ? 'cancelled' : 'pending',
+      rawStatus: status || null,
+      refund,
+    };
+  }
+
+  /** O reembolso vem como `PriceDifferential` de tipo `Refund` no ReshopRS. */
+  private readRefund(payload: XmlValue): { total: number; currency: string | null } | null {
+    const offers = asList(child(payload, 'ReshopResults', 'ReshopOffers', 'Offer'));
+
+    for (const offer of offers) {
+      for (const item of asList(child(offer, 'DeleteOrderItem'))) {
+        const differential = child(item, 'PriceDifferential');
+        if ((text(child(differential, 'DifferentialTypeCode')) ?? '').toLowerCase() !== 'refund') continue;
+
+        // A amostra aninha em `DiffPrice/Price`; há resposta com o total um
+        // nível acima, então os dois caminhos são tentados.
+        const nested = amount(child(differential, 'DiffPrice', 'Price', 'TotalAmount'));
+        const money = nested.value !== null
+          ? nested
+          : amount(child(differential, 'DiffPrice', 'TotalAmount'));
+
+        // `roundMoney` devolve `null` para valor não-finito; aqui já sabemos que
+        // é número, então o fallback é o próprio valor, nunca um zero inventado.
+        const total = money.value;
+        if (total !== null) return { total: roundMoney(total) ?? total, currency: money.currency };
+      }
+    }
+
+    return null;
   }
 
   async retrieve(locator: string, context: RequestContext): Promise<ProviderRetrieval> {

@@ -24,13 +24,14 @@ Tudo acima de `FlightProvider` fala o contrato; tudo abaixo fala XML de forneced
 ```ts
 interface FlightProvider {
   name: string;
-  supports: { fareRules: boolean; retrieve: boolean; multicity: boolean };
+  supports: { fareRules; retrieve; multicity; cancelBooking: boolean };
   probe(ctx): Promise<ProviderProbe>;
   search(request, ctx): AsyncGenerator<ProviderOffer[]>;   // lotes
   quote(key, dto, ctx): Promise<ProviderQuote>;
   book(key, dto, ctx): Promise<ProviderBooking>;
   retrieve(locator, ctx): Promise<ProviderRetrieval>;
   fareRules(key, dto, ctx): Promise<FareRuleSection[]>;
+  cancelBooking?(locator, ctx): Promise<ProviderCancellation>;  // opcional
 }
 ```
 
@@ -58,7 +59,8 @@ cd api
 npm install
 cp .env.example .env
 npm run dev            # porta 3010, Swagger em /docs
-npm test               # 64 testes
+npm test               # 67 testes
+npm run lint
 
 cd ../web
 npm install
@@ -117,7 +119,7 @@ uma rodada de tentativa e erro, e o erro que o gateway devolve raramente aponta 
 
 **`offerPrice` é camelCase; o resto é minúsculo.** `/ndc/v192/offerprice` responde
 `404 Invalid url or Method Not Allowed`. O YAML publicado não lista essa rota. As demais
-(`/airshopping`, `/order/create`, `/order/retrieve`, `/order/cancel`) são todas minúsculas.
+(`/airshopping`, `/order/create`, `/order/retrieve`, `/order/cancel`, `/order/reshop`) são minúsculas.
 
 **O XSD cobra campos que a doc não destaca**, e a mensagem de erro cita o elemento *seguinte* ao que
 faltou:
@@ -128,6 +130,8 @@ faltou:
 | `OfferPrice` | `DataLists/PaxList` de volta | `cvc-identity-constraint.4.3: Key 'PaxIDKeyRef4' not found` |
 | `OrderCreate` | `OwnerCode`, `Individual/IndividualID` | `400113025` |
 | `OrderRetrieve` | `Order` dentro de `OrderFilterCriteria` | `911` |
+| `OrderCreate` | `DataLists/ContactInfoList` — contato é obrigatório | `912 ContactInfoList is null or empty` |
+| `OrderCancel` | `ExpectedRefundAmount`, com o valor vindo do `OrderReshop` | `933` |
 
 **A ordem dos elementos é alfabética, e é obrigatória.** Em `Pax`: `ContactInfoRefID`, `IdentityDoc`,
 `Individual`, `PaxID`, `PTC` — e dentro de `Individual`, `Birthdate` antes de `GivenName`. Fora dessa
@@ -150,6 +154,7 @@ api/src/
   config/            env, timeouts por comando, credenciais
   modules/
     flight/          a camada do CONTRATO — controller, DTOs, casos de uso
+                     (inclui os filtros de `refundable`/`class`, que valem para os dois)
     providers/
       provider.types.ts     a fronteira
       provider.registry.ts  quem atende esta requisição
@@ -206,29 +211,50 @@ escolha dentro do cartão; o `identifier` continua sendo o da família escolhida
 
 ## Estado
 
+Capability é **por provedor**, não global. O guard deixa passar a operação que ALGUM provedor no ar
+faz, e o caso de uso devolve 501 quando o provedor escolhido não faz — antes o mapa era só o da
+Travelfusion, e o `/cancel-booking` respondia 501 mesmo com a LATAM, que cancela.
+
+| Rota | LATAM | Travelfusion |
+|---|---|---|
+| `/availability` (stream) | ✅ AirShopping | ✅ StartRouting + polling |
+| `/quote` | ✅ OfferPrice | ✅ ProcessDetails |
+| `/booking` | ✅ OrderCreate | ✅ ProcessTerms + StartBooking |
+| `/retrieve` | ✅ OrderRetrieve | ✅ CheckBooking |
+| `/cancel-booking` | ✅ OrderReshop + OrderCancel | 501 — `StartBooking` já cobra, cancelar seria estorno |
+| `/fare-rules` | 501 — devolve penalidade estruturada, não o texto da tarifa | ✅ vem no ProcessDetails |
+| `/ping` | ✅ o próprio OAuth2 prova a credencial | ✅ Login |
+| assentos, ancillaries, pagamento, emissão, e-ticket | 501 | 501 |
+
 | | |
 |---|---|
-| Implementado | `/availability` (stream), `/quote`, `/booking`, `/retrieve`, `/fare-rules`, `/ping` |
-| **501** declarado | assentos, ancillaries avulsos, pagamento, emissão, e-ticket, cancelamento |
 | Bloqueio Travelfusion | IP não whitelistado — `Login` passa, comando seguinte volta `4-3448` |
 | LATAM | **funcionando ponta a ponta** contra o sandbox |
 
-O fluxo completo foi percorrido contra o sandbox real da LATAM: busca GRU→SCL (422 tarifas),
-tarifação, reserva (localizador `LA9579666ZURB`, `status: OPENED`) e recuperação da ordem com
-passageiro, documento e nascimento de volta. As rotas `501` respondem `CAPABILITY_NOT_SUPPORTED`,
-como declarado.
+O fluxo completo foi percorrido contra o sandbox real da LATAM: busca GRU→SCL (424 tarifas),
+tarifação, reserva (`LA9574345ABYG`, `OPENED`) e recuperação da ordem com passageiro, documento e
+nascimento de volta.
 
-Duas capacidades são **501 por honestidade**, não por preguiça: a Travelfusion não separa reservar de
-emitir (o `StartBooking` já cobra, então `/issue` é 501), e a LATAM devolve penalidade estruturada em
-vez do texto integral da tarifa — publicar aquilo como "condições" seria dizer que é o que não é.
+**O `/cancel-booking` fica com uma verificação parcial, e vale dizer por quê.** A rota está
+implementada e ligada, o duble cobre os dois passos, e contra o sandbox ela chega ao provedor e
+recebe `400107002 Invalid order current status` — porque a LATAM só cancela ordem **paga**, e as
+ordens criadas aqui ficam em `OPENED`. Fechar isso exige um cartão de teste, que para POS ≠ CL
+precisa ser pedido ao time da LATAM (`operations/order-create-payment.md`). O erro é classificado
+como `RESOURCE_CONFLICT`, não como payload inválido: o corpo está certo, o estado da ordem é que não
+permite.
 
-| Documento | Assunto |
-|---|---|
-| [`docs/stack.md`](docs/stack.md) | A stack NestJS/TS e o que ela resolve estruturalmente |
-| [`docs/entrega.md`](docs/entrega.md) | O que foi construído, o que foi além do mínimo, pendências |
-| [`docs/mapeamento.md`](docs/mapeamento.md) | Rota do contrato ↔ comando do provedor, timeouts, mapa de erro |
-| [`docs/arquitetura.md`](docs/arquitetura.md) | As camadas e onde cada decisão mora |
-| [`docs/decisoes.md`](docs/decisoes.md) | Onde o contrato e os provedores não se encaixam |
+### `options.refundable` e `options.class`
+
+Os dois eram aceitos no pedido e **não faziam efeito** — pior que não existir, porque quem chama
+acredita que filtrou. Agora são aplicados em `AvailabilityService.applyOptionFilters`, na camada do
+contrato, e por isso valem igual nos dois provedores.
+
+🔴 **A cabine NÃO vai para o `AirShopping`**, e isso é medido: com `PreferredCabinType C` a LATAM
+devolve **0** ofertas na mesma busca em que, sem o filtro, devolve **424** — 12 delas business.
+Mandar o critério para cima escondia oferta que existe. Filtrando depois, `class=business` devolve 6.
+
+`refundable: null` é **desconhecido**, não "sim": quem pediu só reembolsável não recebe tarifa cuja
+regra a companhia não afirmou.
 
 ---
 

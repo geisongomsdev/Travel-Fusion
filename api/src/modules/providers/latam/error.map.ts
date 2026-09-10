@@ -39,6 +39,14 @@ const CODE_RULES: Array<{ match: RegExp; code: ErrorCode }> = [
   // Preço mudou entre o AirShopping e o OfferPrice: o contrato tem código próprio.
   { match: /^409107014$/, code: 'FARE_PRICE_CHANGED' },
   { match: /^409140008$/, code: 'FARE_UNAVAILABLE' },
+  /**
+   * 🔴 "Estado da ordem não permite" é CONFLITO, não payload inválido — mesmo
+   * quando o código começa em 400. A família diria `SEARCH_VALIDATION_ERROR` e
+   * mandaria quem chamou conferir o corpo, que está certo; o problema é que a
+   * ordem não está num estado cancelável (ex.: `OPENED`, ainda não paga).
+   */
+  { match: /^400107002$/, code: 'RESOURCE_CONFLICT' },
+  { match: /^933$/, code: 'RESOURCE_CONFLICT' },
 ];
 
 /**

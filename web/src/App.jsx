@@ -28,6 +28,8 @@ export default function App() {
   const [quote, setQuote] = useState(null);
   const [parameters, setParameters] = useState({});
   const [booking, setBooking] = useState(null);
+  const [retrieved, setRetrieved] = useState(null);
+  const [cancellation, setCancellation] = useState(null);
 
   const reset = () => {
     setStep(0);
@@ -37,6 +39,8 @@ export default function App() {
     setQuote(null);
     setParameters({});
     setBooking(null);
+    setRetrieved(null);
+    setCancellation(null);
     setError(null);
   };
 
@@ -120,6 +124,50 @@ export default function App() {
     }
   }
 
+  /**
+   * Pós-venda. As duas rotas existem no contrato e funcionavam sem ter como
+   * serem chamadas daqui — o fluxo terminava no localizador.
+   *
+   * 🔴 O `/retrieve` é a leitura INDEPENDENTE: ele não lê o que guardamos, ele
+   * pergunta à companhia. É o que prova o efeito da reserva e do cancelamento,
+   * e por isso a resposta dele substitui o estado local em vez de acumular.
+   */
+  async function handleRetrieve(locator) {
+    setRunning(true);
+    setError(null);
+    try {
+      const response = await post('/retrieve', {
+        booking: { locator },
+        options: { provider: booking?.provider },
+      });
+      setRetrieved(response.data ?? response);
+    } catch (retrieveError) {
+      setError(retrieveError);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  /**
+   * 🔴 Mutação não idempotente, e sem retry. Se a resposta se perder, o caminho
+   * é o `/retrieve` — nunca cancelar de novo, porque a primeira pode ter valido.
+   */
+  async function handleCancel(locator) {
+    setRunning(true);
+    setError(null);
+    try {
+      const response = await post('/cancel-booking', {
+        booking: { locator },
+        options: { provider: booking?.provider },
+      });
+      setCancellation(response.data ?? response);
+    } catch (cancelError) {
+      setError(cancelError);
+    } finally {
+      setRunning(false);
+    }
+  }
+
   return (
     <div className="flex min-h-screen flex-col">
       {/* Uma faixa índigo só, no topo. Era esse empilhamento de barras que
@@ -167,7 +215,17 @@ export default function App() {
             onContinue={() => setStep(3)}
           />
         )}
-        {step === 3 && <BookingStep onBook={handleBook} running={running} booking={booking} />}
+        {step === 3 && (
+          <BookingStep
+            onBook={handleBook}
+            running={running}
+            booking={booking}
+            retrieved={retrieved}
+            cancellation={cancellation}
+            onRetrieve={handleRetrieve}
+            onCancel={handleCancel}
+          />
+        )}
 
         {step > 0 && (
           <Button variant="outline" size="sm" onClick={() => setStep((s) => Math.max(0, s - 1))}>

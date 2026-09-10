@@ -2,6 +2,7 @@ import { CanActivate, ExecutionContext, Injectable, SetMetadata } from '@nestjs/
 import { Reflector } from '@nestjs/core';
 import { FlightOperation, supportsOperation } from '../capabilities';
 import { notSupported } from '../errors/app-error';
+import { env } from '../../config/env';
 
 export const CAPABILITY_KEY = 'flight:capability';
 
@@ -27,7 +28,9 @@ export class CapabilityGuard implements CanActivate {
     );
 
     if (!operation) return true;
-    if (supportsOperation(operation)) return true;
+    // Só os provedores realmente no ar contam: desligar um em `PROVIDERS` tem
+    // que refletir no que a API declara suportar.
+    if (supportsOperation(operation, env.providers)) return true;
 
     throw notSupported(operation);
   }

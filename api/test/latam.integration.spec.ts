@@ -221,6 +221,22 @@ describe('LatamProvider ponta a ponta', () => {
     expect(booking.locator).toBe('NW6PFQ');
   });
 
+  /**
+   * 🔴 Cancelar é DOIS passos, e o teste existe para provar que o primeiro
+   * acontece: o `OrderCancel` exige `ExpectedRefundAmount`, e esse número vem
+   * do `OrderReshop`. Se alguém "simplificar" mandando zero, o duble recusa.
+   */
+  it('cancela em dois passos: o reshop calcula o reembolso, o cancel executa', async () => {
+    const cancelled = await provider().cancelBooking!('NW6PFQ', {});
+
+    expect(cancelled).toMatchObject({
+      locator: 'NW6PFQ',
+      status: 'cancelled',
+      rawStatus: 'CANCELLED',
+      refund: { total: 625, currency: 'BRL' },
+    });
+  });
+
   it('consulta a reserva com todas as chaves do contrato', async () => {
     const found = await provider().retrieve('ORD-77213', {});
 

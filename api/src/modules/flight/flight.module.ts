@@ -7,10 +7,11 @@ import { FareRulesService } from './use-cases/fare-rules.service';
 import { PingService } from './use-cases/ping.service';
 import { QuoteService } from './use-cases/quote.service';
 import { RetrieveService } from './use-cases/retrieve.service';
+import { CancelBookingService } from './use-cases/cancel-booking.service';
 
 @Module({
   imports: [ProvidersModule],
   controllers: [FlightController],
-  providers: [AvailabilityService, QuoteService, BookingService, RetrieveService, FareRulesService, PingService],
+  providers: [AvailabilityService, QuoteService, BookingService, RetrieveService, CancelBookingService, FareRulesService, PingService],
 })
 export class FlightModule {}

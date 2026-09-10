@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Loader2, Ticket } from 'lucide-react';
+import { Loader2, RefreshCw, Ticket, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -15,7 +15,7 @@ import { Endpoint } from '@/components/sandbox/Endpoint';
  * nível da reserva, e a LATAM recusa o OrderCreate sem eles
  * (`912 ContactInfoList is null or empty`).
  */
-export function BookingStep({ onBook, running, booking }) {
+export function BookingStep({ onBook, running, booking, retrieved, cancellation, onRetrieve, onCancel }) {
   const [passenger, setPassenger] = useState({
     title: 'Mr',
     firstName: 'Andy',
@@ -35,7 +35,18 @@ export function BookingStep({ onBook, running, booking }) {
   const updateContact = (key) => (event) =>
     setContact((prev) => ({ ...prev, [key]: event.target.value }));
 
-  if (booking) return <BookingResult booking={booking} />;
+  if (booking) {
+    return (
+      <BookingResult
+        booking={booking}
+        retrieved={retrieved}
+        cancellation={cancellation}
+        running={running}
+        onRetrieve={onRetrieve}
+        onCancel={onCancel}
+      />
+    );
+  }
 
   const submit = (event) => {
     event.preventDefault();
@@ -164,7 +175,7 @@ export function BookingStep({ onBook, running, booking }) {
  * committed sem confirmed = a reserva pode existir do outro lado. A ação é ESPERAR,
  * nunca reservar de novo.
  */
-function BookingResult({ booking }) {
+function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, onCancel }) {
   const pending = booking.committed && !booking.confirmed;
 
   return (
@@ -207,15 +218,93 @@ function BookingResult({ booking }) {
         </CardContent>
       </Card>
 
-      <Card className="h-fit">
-        <CardHeader>
-          <CardTitle>Resposta</CardTitle>
-          <CardDescription>O corpo cru, como veio do contrato.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <CodeBlock code={JSON.stringify(booking, null, 2)} language="json" title="booking" maxHeight="20rem" />
-        </CardContent>
-      </Card>
+      <div className="space-y-5">
+        <Card>
+          <CardHeader>
+            <CardTitle>Pós-venda</CardTitle>
+            <CardDescription>As duas rotas do contrato que operam sobre a reserva feita.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Endpoint method="POST" path="/retrieve" note="Leitura ao vivo, sem cache: pergunta à companhia." />
+            <Button
+              variant="outline"
+              className="w-full"
+              disabled={running}
+              onClick={() => onRetrieve(booking.locator)}
+            >
+              {running ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              Consultar estado
+            </Button>
+
+            <Endpoint
+              method="POST"
+              path="/cancel-booking"
+              note="OrderReshop calcula o reembolso, OrderCancel executa."
+            />
+            <Button
+              variant="destructive"
+              className="w-full"
+              disabled={running || cancellation?.cancelled}
+              onClick={() => onCancel(booking.locator)}
+            >
+              {running ? <Loader2 className="animate-spin" /> : <XCircle />}
+              {cancellation?.cancelled ? 'Cancelada' : 'Cancelar reserva'}
+            </Button>
+
+            <Callout tone="advice" title="Sem retry">
+              Cancelar é mutação e roda uma vez só. Se a resposta se perder, consulte o estado — não
+              cancele de novo.
+            </Callout>
+          </CardContent>
+        </Card>
+
+        {cancellation && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Cancelamento</CardTitle>
+              <CardDescription>
+                {/* `pending` NÃO é cancelado: a companhia aceitou e ainda não fechou. */}
+                {cancellation.cancelled
+                  ? 'A companhia confirmou o cancelamento.'
+                  : 'Aceito, ainda não fechado — consulte o estado.'}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={cancellation.cancelled ? 'success' : 'warning'}>
+                  {cancellation.status}
+                </Badge>
+                {cancellation.refund && (
+                  <Badge variant="outline">
+                    reembolso {cancellation.refund.currency} {cancellation.refund.total}
+                  </Badge>
+                )}
+              </div>
+              <CodeBlock
+                code={JSON.stringify(cancellation, null, 2)}
+                language="json"
+                title="cancelamento"
+                maxHeight="14rem"
+              />
+            </CardContent>
+          </Card>
+        )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Resposta</CardTitle>
+            <CardDescription>O corpo cru, como veio do contrato.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <CodeBlock
+              code={JSON.stringify(retrieved ?? booking, null, 2)}
+              language="json"
+              title={retrieved ? 'retrieve' : 'booking'}
+              maxHeight="20rem"
+            />
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

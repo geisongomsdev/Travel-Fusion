@@ -123,3 +123,21 @@ export class FareRulesDto {
   @Type(() => FareRulesKeyDto)
   fareRules!: FareRulesKeyDto;
 }
+
+/**
+ * Cancelar usa o mesmo endereçamento do `/retrieve` — localizador mais o
+ * provedor —, e por isso reaproveita os dois blocos em vez de clonar.
+ */
+export class CancelBookingDto {
+  @ApiPropertyOptional({ type: RetrieveOptionsDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => RetrieveOptionsDto)
+  options?: RetrieveOptionsDto;
+
+  @ApiProperty({ type: RetrieveBookingAddressDto })
+  @IsDefined()
+  @ValidateNested()
+  @Type(() => RetrieveBookingAddressDto)
+  booking!: RetrieveBookingAddressDto;
+}
