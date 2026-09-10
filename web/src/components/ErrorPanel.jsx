@@ -30,6 +30,22 @@ const MESSAGES = {
     title: 'Esta tarifa acabou',
     body: 'Alguém comprou os últimos lugares nesta tarifa. Escolha outra opção.',
   },
+  PAYMENT_DECLINED: {
+    title: 'O pagamento não foi autorizado',
+    body: 'O banco recusou a cobrança. Nada foi cobrado. Tente outro cartão.',
+  },
+  'FARE_PRICE_CHANGED:issue': {
+    title: 'O valor mudou',
+    body: 'A companhia atualizou o total desta reserva. Atualize a reserva e pague pelo valor novo.',
+  },
+  'FARE_PRICE_CHANGED:sellAncillaries': {
+    title: 'O preço do extra mudou',
+    body: 'Assentos e bagagens mudam de preço a toda hora. Escolha de novo para ver o valor atual.',
+  },
+  'RESOURCE_CONFLICT:sellAncillaries': {
+    title: 'A reserva está sendo processada',
+    body: 'A companhia ainda está fechando uma operação nesta reserva. Aguarde um instante e tente de novo.',
+  },
   'RESOURCE_NOT_FOUND:retrieve': {
     title: 'Reserva não encontrada',
     body: 'Confira o localizador. Se acabou de reservar, aguarde um instante e tente de novo.',

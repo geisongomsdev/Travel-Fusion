@@ -34,6 +34,8 @@ const DEFINITIONS = {
   FARE_UNAVAILABLE:               { status: 409, category: 'conflict',                message: 'The selected fare is no longer available.' },
   FARE_PRICE_CHANGED:             { status: 409, category: 'conflict',                message: 'The fare price changed since it was quoted.' },
   BOOKING_ALREADY_CANCELLED:      { status: 409, category: 'conflict',                message: 'The booking is already cancelled.' },
+  /** 🔴 A operadora recusou. Nada foi cobrado: a operação é tudo-ou-nada. */
+  PAYMENT_DECLINED:               { status: 409, category: 'conflict',                message: 'The card issuer declined the charge. Nothing was charged.' },
   BOOKING_PARTIAL_FAILURE:        { status: 409, category: 'conflict',                message: 'Booking partially failed and could not be rolled back.' },
   BUSINESS_RULE_VIOLATION:        { status: 422, category: 'business_rule',           message: 'The operation violates a provider or business rule.' },
   RATE_LIMITED:                   { status: 429, category: 'rate_limit',              message: 'Too many requests. Please retry later.' },

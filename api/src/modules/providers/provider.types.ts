@@ -140,6 +140,10 @@ export interface FlightProvider {
     cancelBooking: boolean;
     seatMap: boolean;
     ancillaries: boolean;
+    financingOptions: boolean;
+    issue: boolean;
+    /** Comprar assento/bagagem DEPOIS da emissão. Não é o mesmo que `seatMap`. */
+    sellAncillaries: boolean;
   };
 
   probe(context: RequestContext): Promise<ProviderProbe>;
@@ -168,6 +172,99 @@ export interface FlightProvider {
 
   /** Opcionais vendidos à parte. Endereçado pela oferta, como o mapa. */
   ancillaries?(key: OfferKey, context: RequestContext): Promise<ProviderAncillary[]>;
+
+  /**
+   * Os mesmos dois catálogos, endereçados pela RESERVA já emitida.
+   *
+   * 🔴 Não são um atalho do de cima: o catálogo pós-emissão devolve outros
+   * identificadores, e são os únicos que a compra pós-emissão aceita. Ler pela
+   * oferta e comprar pela ordem não combina.
+   */
+  seatMapForOrder?(locator: string, context: RequestContext): Promise<ProviderSeatMap>;
+
+  ancillariesForOrder?(locator: string, context: RequestContext): Promise<ProviderAncillary[]>;
+
+  /** Comprar os opcionais escolhidos. Mutação não idempotente: cobra o cartão. */
+  sellAncillaries?(
+    locator: string,
+    request: ProviderAncillaryPurchase,
+    context: RequestContext,
+  ): Promise<ProviderAncillaryPurchaseResult>;
+
+  /**
+   * Parcelas do cartão para uma reserva. O PAN é dado de pagamento: existe na
+   * chamada porque a operadora precisa dele, e não é logado nem guardado.
+   */
+  financingOptions?(locator: string, pan: string, context: RequestContext): Promise<ProviderFinancing>;
+
+  /** Pagar a reserva. Mutação não idempotente, sem retry. */
+  issue?(locator: string, payment: ProviderPayment, context: RequestContext): Promise<ProviderIssue>;
+}
+
+export interface ProviderFinancing {
+  cardBrand: string | null;
+  currency: string | null;
+  options: Array<{
+    id: string;
+    installments: number;
+    installmentAmount: number | null;
+    total: number | null;
+    interestRate: number | null;
+    /** `true` quando a companhia marcou como promocional. */
+    promotional: boolean;
+  }>;
+}
+
+export interface ProviderPayment {
+  card: { brand: string; holder: string; number: string; securityCode: string; expiration: string };
+  billing: { email: string; countryCode: string; postalCode: string; street: string };
+  /** Quem paga — obrigatório na LATAM, e nem sempre é o passageiro. */
+  payer: { firstName: string; lastName: string; dateOfBirth: string; documentNumber: string };
+  amount: { total: number; currency: string };
+  installmentId: string | null;
+}
+
+export interface ProviderAncillaryPurchase {
+  items: Array<{
+    offerItemId: string;
+    paxId: string;
+    /** Obrigatório para assento: a LATAM quer a poltrona além do id. */
+    seat?: { row: string; column: string } | null;
+  }>;
+  amount: { total: number; currency: string };
+  /** `null` cobra por BSP (`PaymentTypeCode CA`) — usado quando o total é zero. */
+  card: {
+    brand: string;
+    holder: string;
+    number: string;
+    securityCode: string;
+    expiration: string;
+  } | null;
+  payer: { firstName: string; lastName: string; dateOfBirth: string; documentNumber: string } | null;
+}
+
+export interface ProviderAncillaryPurchaseResult {
+  locator: string;
+  /** `confirmed` só quando a companhia diz que o serviço está confirmado. */
+  status: 'confirmed' | 'pending';
+  rawStatus: string | null;
+  services: Array<{
+    serviceId: string | null;
+    name: string | null;
+    paxId: string | null;
+    segmentId: string | null;
+    seat: string | null;
+    status: string | null;
+  }>;
+  total: { total: number; currency: string | null } | null;
+}
+
+export interface ProviderIssue {
+  locator: string;
+  /** `issued` só em status final. Pendente NÃO é emitido. */
+  status: 'issued' | 'pending';
+  rawStatus: string | null;
+  tickets: string[];
 }
 
 export interface ProviderAncillary {

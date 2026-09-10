@@ -7,14 +7,21 @@ import { SearchStep } from '@/steps/SearchStep';
 import { ResultsStep } from '@/steps/ResultsStep';
 import { QuoteStep } from '@/steps/QuoteStep';
 import { BookingStep } from '@/steps/BookingStep';
+import { PaymentStep } from '@/steps/PaymentStep';
+import { ExtrasStep } from '@/steps/ExtrasStep';
 import { post, streamAvailability } from '@/lib/api';
 
-/** O fluxo do contrato. A emissão não entra: é 501 nos dois provedores. */
+/**
+ * O fluxo até a passagem na mão. Reservar e pagar são passos SEPARADOS porque
+ * são separados na companhia: a ordem nasce sem pagamento e tem prazo.
+ */
 const STEPS = [
   { key: 'search', label: 'Buscar' },
   { key: 'results', label: 'Escolher' },
   { key: 'quote', label: 'Revisar' },
   { key: 'booking', label: 'Passageiro' },
+  { key: 'payment', label: 'Pagar' },
+  { key: 'extras', label: 'Extras' },
 ];
 
 export default function App() {
@@ -36,6 +43,15 @@ export default function App() {
   const [seat, setSeat] = useState(null);
   const [loadingSeats, setLoadingSeats] = useState(false);
 
+  // Pós-reserva: pagamento, parcelas e a compra de extras sobre a ordem emitida.
+  const [installments, setInstallments] = useState(null);
+  const [loadingInstallments, setLoadingInstallments] = useState(false);
+  const [issued, setIssued] = useState(null);
+  const [orderSeatMap, setOrderSeatMap] = useState(null);
+  const [orderAncillaries, setOrderAncillaries] = useState(null);
+  const [loadingExtras, setLoadingExtras] = useState(false);
+  const [purchase, setPurchase] = useState(null);
+
   const reset = () => {
     setStep(0);
     setEvents([]);
@@ -50,6 +66,11 @@ export default function App() {
     setSeat(null);
     setAncillaries([]);
     setExtras([]);
+    setInstallments(null);
+    setIssued(null);
+    setOrderSeatMap(null);
+    setOrderAncillaries(null);
+    setPurchase(null);
     setError(null);
   };
 
@@ -203,6 +224,96 @@ export default function App() {
     }
   }
 
+  /**
+   * Parcelas.
+   *
+   * 🔴 A consulta leva o número do cartão porque só a operadora sabe em quantas
+   * vezes AQUELE cartão paga. O número não é guardado nem logado em lugar
+   * nenhum — vai na chamada e morre com ela.
+   */
+  async function handleInstallments(pan) {
+    setLoadingInstallments(true);
+    setError(null);
+    try {
+      const response = await post('/financing-options', {
+        booking: { locator: booking.locator },
+        options: { provider: booking.provider },
+        card: pan,
+      });
+      setInstallments(response.data?.options ?? []);
+    } catch (installmentError) {
+      setError(Object.assign(installmentError, { operation: 'financingOptions' }));
+    } finally {
+      setLoadingInstallments(false);
+    }
+  }
+
+  /**
+   * 🔴 COBRA O CARTÃO. Não é idempotente e não tem retry: se a resposta se
+   * perder, o caminho é Atualizar a reserva, nunca pagar de novo.
+   *
+   * O valor não é mandado daqui de propósito — a API pergunta à companhia
+   * quanto custa antes de cobrar.
+   */
+  async function handlePay({ card, payer, billing, installmentId }) {
+    setRunning(true);
+    setError(null);
+    try {
+      const response = await post('/issue', {
+        booking: { locator: booking.locator },
+        options: { provider: booking.provider },
+        card,
+        payer,
+        billing,
+        ...(installmentId ? { installmentId } : {}),
+      });
+      setIssued(response.data);
+    } catch (payError) {
+      setError(Object.assign(payError, { operation: 'issue' }));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  /** O catálogo da RESERVA — outro do que o da oferta, e o único que se compra. */
+  async function handleLoadExtras() {
+    setLoadingExtras(true);
+    setError(null);
+    try {
+      const body = { booking: { locator: booking.locator }, options: { provider: booking.provider } };
+      const [map, extra] = await Promise.all([
+        post('/order-seat-map', body),
+        post('/order-ancillaries', body),
+      ]);
+      setOrderSeatMap(map.data);
+      setOrderAncillaries(extra.data?.ancillaries ?? []);
+    } catch (extrasError) {
+      setError(Object.assign(extrasError, { operation: 'seatMap' }));
+    } finally {
+      setLoadingExtras(false);
+    }
+  }
+
+  /** 🔴 Também cobra o cartão, e também sem retry. */
+  async function handleBuyExtras({ items, card, payer }) {
+    setRunning(true);
+    setError(null);
+    try {
+      const response = await post('/sell-ancillaries', {
+        booking: { locator: booking.locator },
+        options: { provider: booking.provider },
+        items,
+        card,
+        payer,
+      });
+      setPurchase(response.data);
+    } catch (buyError) {
+      setError(Object.assign(buyError, { operation: 'sellAncillaries' }));
+    } finally {
+      setRunning(false);
+    }
+  }
+
   return (
     <div className="flex min-h-screen flex-col">
       {/* Uma faixa índigo só, no topo. Era esse empilhamento de barras que
@@ -263,6 +374,34 @@ export default function App() {
             cancellation={cancellation}
             onRetrieve={handleRetrieve}
             onCancel={handleCancel}
+            onPay={() => setStep(4)}
+          />
+        )}
+        {step === 4 && (
+          <PaymentStep
+            locator={booking?.locator}
+            amount={retrieved?.total ?? quote?.price?.total}
+            currency={retrieved?.currency ?? quote?.price?.currency}
+            running={running}
+            installments={installments}
+            loadingInstallments={loadingInstallments}
+            onLoadInstallments={handleInstallments}
+            issued={issued}
+            onPay={handlePay}
+            onDone={() => setStep(5)}
+          />
+        )}
+        {step === 5 && (
+          <ExtrasStep
+            locator={booking?.locator}
+            currency={retrieved?.currency ?? quote?.price?.currency}
+            seatMap={orderSeatMap}
+            ancillaries={orderAncillaries}
+            loading={loadingExtras}
+            running={running}
+            purchase={purchase}
+            onLoad={handleLoadExtras}
+            onBuy={handleBuyExtras}
           />
         )}
 

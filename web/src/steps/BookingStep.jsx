@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle2, Clock, Loader2, RefreshCw, Ticket, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock, CreditCard, Loader2, RefreshCw, Ticket, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -15,7 +15,7 @@ import { formatMoney, formatTime } from '@/lib/utils';
  * idempotência. Isso é verdade da integração — vive no README e no código, não
  * na frente de quem está comprando.
  */
-export function BookingStep({ onBook, running, booking, retrieved, cancellation, onRetrieve, onCancel }) {
+export function BookingStep({ onBook, running, booking, retrieved, cancellation, onRetrieve, onCancel, onPay }) {
   const [passenger, setPassenger] = useState({
     title: 'Mr',
     firstName: 'Andy',
@@ -44,6 +44,7 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
         running={running}
         onRetrieve={onRetrieve}
         onCancel={onCancel}
+        onPay={onPay}
       />
     );
   }
@@ -139,7 +140,7 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
  * mesma coisa que `committed && !confirmed` sem exigir que o passageiro saiba
  * o que é polling.
  */
-function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, onCancel }) {
+function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, onCancel, onPay }) {
   const pending = booking.committed && !booking.confirmed;
   const status = retrieved?.status ?? (booking.confirmed ? 'confirmed' : 'pending');
   const cancelled = cancellation?.cancelled || status === 'cancelled';
@@ -226,6 +227,13 @@ function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, 
           )}
 
           <div className="flex flex-wrap gap-2 border-t pt-4">
+            {/* 🔴 Reservar não é pagar: a companhia segura o assento por um prazo
+                e só o pagamento fecha a passagem. */}
+            {!cancelled && (
+              <Button disabled={running} onClick={onPay}>
+                <CreditCard /> Pagar
+              </Button>
+            )}
             <Button variant="outline" disabled={running} onClick={() => onRetrieve(booking.locator)}>
               {running ? <Loader2 className="animate-spin" /> : <RefreshCw />}
               Atualizar

@@ -47,6 +47,24 @@ const CODE_RULES: Array<{ match: RegExp; code: ErrorCode }> = [
    */
   { match: /^400107002$/, code: 'RESOURCE_CONFLICT' },
   { match: /^933$/, code: 'RESOURCE_CONFLICT' },
+  /**
+   * 🔴 `400300005` é o valor do opcional divergindo do que a companhia calculou.
+   * Isso é preço mudado, não corpo malformado: o catálogo foi lido, o preço
+   * mudou entre a leitura e a compra, e quem chamou precisa reler — é
+   * exatamente o que `FARE_PRICE_CHANGED` significa no contrato.
+   */
+  { match: /^400300005$/, code: 'FARE_PRICE_CHANGED' },
+  /**
+   * 🔴 `409300032 Unsuccessful authorize` é a operadora RECUSANDO a cobrança do
+   * opcional. Não é conflito de estado nem erro nosso: nada foi cobrado e nada
+   * foi adicionado — a operação é tudo-ou-nada do lado da LATAM.
+   */
+  { match: /^409300032$/, code: 'PAYMENT_DECLINED' },
+  /**
+   * A ordem está sendo processada do lado da companhia. Transitório de verdade:
+   * some sozinho, e a saída é reler pelo /retrieve, nunca repetir a mutação.
+   */
+  { match: /^409123018$/, code: 'RESOURCE_CONFLICT' },
 ];
 
 /**

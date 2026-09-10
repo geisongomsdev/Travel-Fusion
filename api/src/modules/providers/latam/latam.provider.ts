@@ -8,7 +8,10 @@ import { AvailabilityDto } from '../../flight/dto/availability.dto';
 import { CreateBookingDto, QuoteDto } from '../../flight/dto/booking.dto';
 import {
   FareRuleSection, FlightProvider, ProviderBooking, ProviderOffer, ProviderProbe, ProviderQuote,
-  ProviderAncillary, ProviderCancellation, ProviderRetrieval, ProviderSeatMap, RequestContext,
+  ProviderAncillary,
+  ProviderAncillaryPurchase,
+  ProviderAncillaryPurchaseResult, ProviderCancellation, ProviderFinancing, ProviderIssue, ProviderPayment,
+  ProviderRetrieval, ProviderSeatMap, RequestContext,
 } from '../provider.types';
 import { asList, attr, child, num, text, XmlValue } from '../../../common/xml/xml.util';
 import { buildPaxList, LatamCommands } from './latam.commands';
@@ -47,6 +50,10 @@ export class LatamProvider implements FlightProvider {
     seatMap: true,
     // /services/list, mesma forma do mapa de assentos.
     ancillaries: true,
+    // /installments/options e /order/change/payment: a ordem nasce sem pagar.
+    financingOptions: true,
+    issue: true,
+    sellAncillaries: true,
   };
 
   constructor(private readonly commands: LatamCommands) {}
@@ -308,14 +315,172 @@ export class LatamProvider implements FlightProvider {
      * palavra (`OfferID`) valendo coisas diferentes em duas mensagens.
      */
     const offerId = key.i ?? key.r;
-    const { payload } = await this.commands.seatAvailability(offerId, key.x ?? [], context);
+    const { payload } = await this.commands.seatAvailability({ offerId }, key.x ?? [], context);
     return normalizeSeatMap(payload);
   }
 
   /** Opcionais da oferta. Mesmo endereçamento do mapa: pelo item, não pelo UUID. */
   async ancillaries(key: OfferKey, context: RequestContext): Promise<ProviderAncillary[]> {
-    const { payload } = await this.commands.serviceList(key.i ?? key.r, key.x ?? [], context);
+    const { payload } = await this.commands.serviceList({ offerId: key.i ?? key.r }, key.x ?? [], context);
     return normalizeServiceList(payload);
+  }
+
+  /**
+   * Os mesmos catálogos, agora sobre a reserva emitida.
+   *
+   * 🔴 Os `offerItemId` que voltam daqui (`SEAT_…`/`BAG_…`) NÃO são os mesmos
+   * do catálogo por oferta (`SEI|…`), e só eles servem para comprar depois da
+   * emissão. Trocar um pelo outro é o que fazia a LATAM responder
+   * `INVALID_OFFER_TYPES`.
+   */
+  async seatMapForOrder(locator: string, context: RequestContext): Promise<ProviderSeatMap> {
+    const paxIds = await this.paxIdsOf(locator, context);
+    const { payload } = await this.commands.seatAvailability({ orderId: locator }, paxIds, context);
+    return normalizeSeatMap(payload);
+  }
+
+  async ancillariesForOrder(locator: string, context: RequestContext): Promise<ProviderAncillary[]> {
+    const paxIds = await this.paxIdsOf(locator, context);
+    const { payload } = await this.commands.serviceList({ orderId: locator }, paxIds, context);
+    return normalizeServiceList(payload);
+  }
+
+  /**
+   * Comprar assento e/ou bagagem numa reserva já emitida.
+   *
+   * Total zero é caso real — assento cortesia — e aí a cobrança vai por BSP em
+   * vez de cartão, que é o que a própria amostra da LATAM faz.
+   */
+  async sellAncillaries(
+    locator: string,
+    request: ProviderAncillaryPurchase,
+    context: RequestContext,
+  ): Promise<ProviderAncillaryPurchaseResult> {
+    const payment = request.card && request.payer
+      ? ({ method: 'card', card: request.card, payer: request.payer } as const)
+      : ({ method: 'cash' } as const);
+
+    const { payload } = await this.commands.orderChangeAddAncillaries(
+      locator,
+      request.items,
+      request.amount,
+      payment,
+      context,
+    );
+
+    const order = child(payload, 'Order') ?? payload;
+    const status = (text(child(order, 'StatusCode')) ?? '').toUpperCase();
+
+    /**
+     * Os serviços recém-confirmados vêm espalhados pelos `OrderItem`; o que
+     * interessa devolver é o que o passageiro vê: o quê, de quem, onde.
+     */
+    const services = asList(child(order, 'OrderItem')).flatMap((item) =>
+      asList(child(item, 'Service')).map((service) => {
+        const seat = child(service, 'OrderServiceAssociation', 'SeatOnLeg', 'Seat');
+        const row = text(child(seat, 'RowNumber'));
+        const column = text(child(seat, 'ColumnID'));
+
+        return {
+          serviceId: text(child(service, 'ServiceID')) ?? null,
+          name: text(child(service, 'OrderServiceAssociation', 'ServiceDefinitionRef', 'ServiceDefinitionRefID')) ?? null,
+          paxId: text(child(service, 'PaxRefID')) ?? null,
+          segmentId: text(child(service, 'OrderServiceAssociation', 'ServiceDefinitionRef', 'PaxSegmentRefID')) ?? null,
+          seat: row && column ? `${row}${column}` : null,
+          status: text(child(service, 'StatusCode')) ?? null,
+        };
+      }),
+    );
+
+    const total = num(child(order, 'TotalPrice', 'TotalAmount'));
+
+    return {
+      locator,
+      status: CONFIRMED_STATUSES.has(status) || status === 'OPENED' ? 'confirmed' : 'pending',
+      rawStatus: status || null,
+      services,
+      total: total === null
+        ? null
+        : { total, currency: attr(child(order, 'TotalPrice', 'TotalAmount'), 'CurCode') },
+    };
+  }
+
+  /**
+   * Os catálogos por ordem exigem a lista de passageiros, e ela não vem no
+   * corpo do pedido — está na própria reserva. Perguntar é mais barato que
+   * fazer quem chama repetir dado que a companhia já tem.
+   */
+  private async paxIdsOf(locator: string, context: RequestContext): Promise<string[]> {
+    const { payload } = await this.commands.orderRetrieve(locator, context);
+    const ids = asList(child(payload, 'DataLists', 'PaxList', 'Pax'))
+      .map((pax) => text(child(pax, 'PaxID')))
+      .filter((id): id is string => Boolean(id));
+
+    return ids.length > 0 ? ids : ['ADT_1'];
+  }
+
+  /**
+   * As parcelas que o cartão aceita para esta ordem.
+   *
+   * 🔴 A resposta NÃO é NDC: `<InstallmentOptionsRS>` na raiz, sem `<Response>`
+   * dentro — por isso o payload é lido direto, sem descer um nível.
+   */
+  async financingOptions(
+    locator: string,
+    pan: string,
+    context: RequestContext,
+  ): Promise<ProviderFinancing> {
+    const { parsed } = await this.commands.installmentOptions(pan, locator, context);
+    const root = (Object.values(parsed)[0] ?? {}) as XmlValue;
+
+    return {
+      cardBrand: text(child(root, 'CardCode')),
+      currency: text(child(root, 'Currency')),
+      options: asList(child(root, 'InstallmentOptions'))
+        .map((option) => ({
+          id: text(child(option, 'InstallmentId')) ?? '',
+          installments: num(child(option, 'NumberOfInstallments')) ?? 0,
+          installmentAmount: num(child(option, 'InstallmentAmount')),
+          total: num(child(option, 'TotalPaymentAmount')),
+          interestRate: num(child(option, 'InterestRate')),
+          promotional: text(child(option, 'PromotionalInd')) === 'true',
+        }))
+        // Opção sem id não serve: é ele que volta no pagamento, como TrxID.
+        .filter((option) => option.id !== ''),
+    };
+  }
+
+  /**
+   * Pagar a reserva.
+   *
+   * 🔴 Mutação NÃO idempotente, e a mais cara de errar: o client força
+   * `retries: 0` porque repetir aqui cobra duas vezes. Se a resposta se perder,
+   * o caminho é o `/retrieve` — nunca pagar de novo.
+   */
+  async issue(locator: string, payment: ProviderPayment, context: RequestContext): Promise<ProviderIssue> {
+    const { payload } = await this.commands.orderChangePayment(
+      locator,
+      payment.amount,
+      payment.card,
+      payment.billing,
+      payment.payer,
+      payment.installmentId,
+      context,
+    );
+
+    const order = child(payload, 'Order') ?? payload;
+    const status = (text(child(order, 'StatusCode')) ?? '').toUpperCase();
+
+    return {
+      locator,
+      // Emitido é status FINAL. `OPENED` continua pendente, mesmo com o pagamento aceito.
+      status: CONFIRMED_STATUSES.has(status) ? 'issued' : 'pending',
+      rawStatus: status || null,
+      // Os bilhetes aparecem na ordem depois da emissão; antes disso, `[]`.
+      tickets: asList(child(payload, 'DataLists', 'TicketDocInfoList', 'TicketDocInfo'))
+        .map((ticket) => text(child(ticket, 'TicketDocNbr')))
+        .filter((number): number is string => Boolean(number)),
+    };
   }
 
   async retrieve(locator: string, context: RequestContext): Promise<ProviderRetrieval> {

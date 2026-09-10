@@ -53,6 +53,10 @@ export class TravelfusionProvider implements FlightProvider {
     seatMap: false,
     // Os opcionais da Travelfusion saem no /quote, como requiredParameters.
     ancillaries: false,
+    // O StartBooking ja cobra: nao ha o que financiar nem o que emitir depois.
+    financingOptions: false,
+    issue: false,
+    sellAncillaries: false,
   };
 
   constructor(private readonly commands: TravelfusionCommands) {}
