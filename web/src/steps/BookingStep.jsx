@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { formatMoney } from '@/lib/utils';
+import { formatMoney, formatTime } from '@/lib/utils';
 
 /**
  * 🔴 Os campos aqui não são escolha de tela: são os `requiredParameters` que o
@@ -179,6 +179,42 @@ function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, 
             <p className="font-mono text-2xl font-semibold tracking-wide">{booking.locator || '—'}</p>
           </div>
 
+          {/* O voo só aparece depois de Atualizar: é o /retrieve que traz o
+              itinerário, e ele é leitura ao vivo, não cópia do que guardamos. */}
+          {retrieved?.segments?.length > 0 && (
+            <div className="space-y-3 rounded-lg border px-4 py-3">
+              {retrieved.segments.map((segment) => (
+                <div key={segment.segmentId} className="flex flex-wrap items-baseline justify-between gap-2">
+                  <div>
+                    <p className="font-medium tabular-nums">
+                      {formatTime(segment.departure)} → {formatTime(segment.arrival)}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {segment.origin} → {segment.destination}
+                      {segment.company.code ? ` · ${segment.company.code}${segment.company.number ?? ''}` : ''}
+                      {segment.cabin ? ` · ${segment.cabin.toLowerCase()}` : ''}
+                    </p>
+                  </div>
+                  {segment.duration && (
+                    <span className="text-sm text-muted-foreground">{humanDuration(segment.duration)}</span>
+                  )}
+                </div>
+              ))}
+              {retrieved.total !== null && retrieved.total !== undefined && (
+                <p className="border-t pt-3 text-sm">
+                  Total <span className="font-medium">{formatMoney(retrieved.total, retrieved.currency)}</span>
+                </p>
+              )}
+            </div>
+          )}
+
+          {retrieved?.expiresAt && !cancelled && (
+            <p className="text-sm text-muted-foreground">
+              Pague até <span className="font-medium text-foreground">{formatDeadline(retrieved.expiresAt)}</span>{' '}
+              ou a companhia libera o assento.
+            </p>
+          )}
+
           {cancellation?.refund && (
             <p className="text-sm text-muted-foreground">
               Reembolso de{' '}
@@ -204,4 +240,22 @@ function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, 
       </Card>
     </div>
   );
+}
+
+/** `PT4H5M` → `4h05`. A companhia manda ISO-8601; ninguém lê ISO-8601. */
+function humanDuration(iso) {
+  const match = /PT(?:(\d+)H)?(?:(\d+)M)?/.exec(iso ?? '');
+  if (!match) return null;
+
+  const [, hours, minutes] = match;
+  if (!hours) return `${minutes ?? 0}min`;
+
+  return `${hours}h${minutes ? String(minutes).padStart(2, '0') : ''}`;
+}
+
+/** Data do prazo sem segundos nem fuso — o que importa é o dia e a hora. */
+function formatDeadline(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }

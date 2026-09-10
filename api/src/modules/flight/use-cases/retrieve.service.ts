@@ -52,15 +52,15 @@ export class RetrieveService {
       data: {
         status: found.status,
         type: 'flight',
-        // Nenhum dos dois provedores devolve os trechos nesta leitura, então o
-        // tipo de viagem não é derivável aqui. `null` é a resposta honesta.
-        trip: null,
+        // Com os trechos em mãos dá para dizer o tipo; sem eles, `null` segue
+        // sendo a resposta honesta.
+        trip: found.segments.length === 0 ? null : (found.segments.length > 1 ? 'roundtrip' : 'oneway'),
         grouping: null,
         title: null,
-        destination: null,
-        iata: null,
-        departure: null,
-        arrival: null,
+        destination: found.segments.at(-1)?.destination ?? null,
+        iata: found.segments[0]?.origin ?? null,
+        departure: found.segments[0]?.departure ?? null,
+        arrival: found.segments.at(-1)?.arrival ?? null,
         currency: found.currency,
 
         createdAt: found.createdAt,
@@ -76,8 +76,11 @@ export class RetrieveService {
         supplier: { confirmation: found.supplierConfirmation },
 
         people: this.normalizePeople(found.people),
-        segments: null,
+        // `[]` e `null` dizem coisas diferentes: vazio é 'a companhia não
+        // informou', e é o que a Travelfusion devolve.
+        segments: found.segments,
         itinerary: null,
+        total: found.total,
       },
     };
   }

@@ -88,6 +88,30 @@ export interface ProviderRetrieval {
   expiresAt: string | null;
   confirmationAt: string | null;
   people: Record<string, unknown>[];
+  /**
+   * Os trechos da reserva. `[]` quando a companhia não os devolve nesta leitura
+   * — é o caso da Travelfusion, cujo `CheckBooking` não traz itinerário.
+   *
+   * 🔴 A LATAM traz: o `OrderRetrieve` devolve `PaxSegmentList` completo, com
+   * voo, horários, duração e aeronave. Isso estava sendo jogado fora porque o
+   * contrato foi escrito quando só existia a Travelfusion.
+   */
+  segments: ProviderSegment[];
+  /** Total pago/a pagar, quando a companhia informa. */
+  total: number | null;
+}
+
+export interface ProviderSegment {
+  segmentId: string | null;
+  origin: string | null;
+  destination: string | null;
+  departure: string | null;
+  arrival: string | null;
+  /** ISO-8601 (`PT4H5M`) — devolvido como veio, sem virar minutos. */
+  duration: string | null;
+  company: { code: string | null; number: string | null };
+  cabin: string | null;
+  aircraft: string | null;
 }
 
 export interface FareRuleSection {

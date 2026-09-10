@@ -211,6 +211,10 @@ export class TravelfusionProvider implements FlightProvider {
         dateOfBirth: text(traveller?.DateOfBirth),
         type: text(traveller?.Type),
       })),
+      // 🔴 O CheckBooking NAO devolve itinerario. `[]` aqui e limite do
+      // provedor, nao lacuna nossa — e o contrato distingue as duas coisas.
+      segments: [],
+      total: null,
     };
   }
 

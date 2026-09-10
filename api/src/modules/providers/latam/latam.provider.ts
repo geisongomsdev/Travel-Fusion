@@ -340,8 +340,19 @@ export class LatamProvider implements FlightProvider {
       supplierName: text(child(order, 'OwnerCode')) ?? 'LA',
       currency: attr(child(order, 'TotalPrice', 'TotalAmount'), 'CurCode'),
       createdAt: text(child(order, 'CreateDateTime')),
-      // Prazo do time limit: depois disso a companhia cancela sozinha.
-      expiresAt: text(child(order, 'PaymentTimeLimitDateTime')) ?? text(child(order, 'TimeLimitDateTime')),
+      /**
+       * Prazo de pagamento: depois disso a companhia cancela sozinha.
+       *
+       * 🔴 Ele NÃO fica no `Order` — vive dentro do `OrderItem`, um por item.
+       * Procurar só no nível de cima devolvia `null` numa ordem que tinha o
+       * prazo declarado. O menor manda: é o primeiro que expira.
+       */
+      expiresAt: asList(child(order, 'OrderItem'))
+        .map((item) => text(child(item, 'PaymentTimeLimitDateTime')))
+        .filter((value): value is string => Boolean(value))
+        .sort()[0]
+        ?? text(child(order, 'PaymentTimeLimitDateTime'))
+        ?? text(child(order, 'TimeLimitDateTime')),
       confirmationAt: text(child(order, 'CreateDateTime')),
       people: asList(child(payload, 'DataLists', 'PaxList', 'Pax')).map((pax) => ({
         firstName: text(child(pax, 'Individual', 'GivenName')),
@@ -352,6 +363,30 @@ export class LatamProvider implements FlightProvider {
         dateOfBirth: text(child(pax, 'Birthdate')) ?? text(child(pax, 'Individual', 'Birthdate')),
         type: text(child(pax, 'PTC')),
       })),
+      /**
+       * 🔴 O `OrderRetrieve` da LATAM devolve o itinerário INTEIRO, e isso
+       * estava sendo descartado: o contrato dizia `segments: null` porque foi
+       * escrito quando só existia a Travelfusion, cujo `CheckBooking` de fato
+       * não traz trecho nenhum. Aqui os dados existem — voo, horários, duração
+       * e aeronave — e são o que a pessoa quer ver depois de reservar.
+       */
+      segments: asList(child(payload, 'DataLists', 'PaxSegmentList', 'PaxSegment')).map((segment) => ({
+        segmentId: text(child(segment, 'PaxSegmentID')),
+        origin: text(child(segment, 'Dep', 'IATA_LocationCode')),
+        destination: text(child(segment, 'Arrival', 'IATA_LocationCode')),
+        departure: text(child(segment, 'Dep', 'AircraftScheduledDateTime')),
+        arrival: text(child(segment, 'Arrival', 'AircraftScheduledDateTime')),
+        duration: text(child(segment, 'Duration')),
+        company: {
+          code: text(child(segment, 'MarketingCarrierInfo', 'CarrierDesigCode')),
+          number: text(child(segment, 'MarketingCarrierInfo', 'MarketingCarrierFlightNumberText')),
+        },
+        cabin: text(child(segment, 'CabinType', 'CabinTypeName')),
+        aircraft: text(
+          child(segment, 'DatedOperatingLeg', 'CarrierAircraftType', 'CarrierAircraftTypeCode'),
+        ),
+      })),
+      total: num(child(order, 'TotalPrice', 'TotalAmount')),
     };
   }
 
