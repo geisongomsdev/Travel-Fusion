@@ -166,10 +166,19 @@ registrado.
 > botão nenhum.
 
 Cancelar, aliás, são **duas operações diferentes**, e quem escolhe é a companhia: se ainda está
-dentro da janela de arrependimento, ela **anula** o bilhete (o cupom fica marcado como anulado); se
-já passou, ela calcula um **reembolso** e devolve o valor. A gente pergunta primeiro qual dos dois
-é o caso, e só então cancela. Nos testes, o cancelamento voltou "anulação concluída" com
-R$ 1.023,18 declarados como devolvidos.
+dentro da janela de arrependimento, ela **anula** o bilhete; se já passou, ela calcula um
+**reembolso**. A gente pergunta primeiro qual dos dois é o caso, e só então cancela. Nos testes, o
+cancelamento voltou "anulação concluída" com R$ 1.023,18 declarados como devolvidos.
+
+**Uma curiosidade que vale contar,** porque explica um comportamento estranho: depois de anulada, a
+companhia **continua dizendo que a reserva está "fechada"**. Do ponto de vista dela a ordem existe e
+foi concluída. Quem conta a verdade é o *cupom* do bilhete, que fica marcado como anulado — e é ele
+que a gente olha. Sem isso, uma passagem cancelada apareceria na tela como se estivesse de pé.
+
+E se você tentar cancelar duas vezes, a companhia responde com um código que significa duas coisas
+opostas ao mesmo tempo: "ainda não foi paga" **e** "já foi cancelada". Como a diferença muda tudo
+para quem está lendo, o sistema vai lá conferir o cupom antes de escolher a frase — e diz "esta
+passagem já foi cancelada", que é o que de fato aconteceu.
 
 #### E a compra de assento e bagagem
 

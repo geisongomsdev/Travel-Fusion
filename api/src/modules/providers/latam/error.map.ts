@@ -91,6 +91,22 @@ export function readLatamError(parsed: Record<string, any>): ProviderFault | nul
   };
 }
 
+/**
+ * Onde o CÓDIGO não basta e é o TEXTO que diz o que houve.
+ *
+ * 🔴 A LATAM reaproveita o `933`: ele tanto significa "faltou o
+ * ExpectedRefundAmount" quanto "esta ordem não está em estado de anular" — que
+ * é o que ela responde quando a passagem JÁ FOI cancelada. O mesmo código com
+ * dois sentidos vira, na tela, ou um pedido de corrigir o corpo (que está
+ * certo) ou "ainda não dá para cancelar" (quando na verdade já cancelou).
+ *
+ * Casar no texto é frágil por natureza, então as regras são poucas e só
+ * ESTREITAM o significado: sem casar, vale o código, como antes.
+ */
+const MESSAGE_RULES: Array<{ match: RegExp; code: ErrorCode }> = [
+  { match: /not suitable for (the )?void|already (been )?(cancell?ed|voided)|order (is )?cancell?ed/i, code: 'BOOKING_ALREADY_CANCELLED' },
+];
+
 export function mapLatamError(
   fault: ProviderFault | null,
   operation: string,
@@ -99,7 +115,9 @@ export function mapLatamError(
   const code = fault?.code ?? null;
   const message = fault?.message ?? null;
 
-  const explicit = CODE_RULES.find((rule) => rule.match.test(code ?? ''))?.code;
+  // O texto tem precedência sobre o código: ele é mais específico quando existe.
+  const byMessage = message ? MESSAGE_RULES.find((rule) => rule.match.test(message))?.code : undefined;
+  const explicit = byMessage ?? CODE_RULES.find((rule) => rule.match.test(code ?? ''))?.code;
   // Família pelo prefixo do próprio código; o status da conexão é só o plano B.
   const byClass = code && /^\d{9}$/.test(code)
     ? CLASS_RULES[code.slice(0, 3)]

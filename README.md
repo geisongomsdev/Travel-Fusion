@@ -294,6 +294,21 @@ Duas armadilhas moravam aí:
 (tarifa, taxa de embarque, opcionais). Procurando só dentro do `DiffPrice`, o cancelamento parava
 com "sem valor de reembolso" numa resposta que trazia o valor.
 
+**O cancelamento não aparece no status da ordem.** Um bilhete anulado continua com
+`Order/StatusCode: CLOSED` — do ponto de vista da companhia a ordem existe e está fechada. Quem
+conta a verdade é o **cupom**, em `TicketDocInfo/Ticket/Coupon/CouponStatusCode: VOID`. Sem olhar
+ali, o `/retrieve` publicava como confirmada uma passagem já anulada, e o cupom tem precedência
+justamente porque quem comprou não vai voar.
+
+**`400107002 Invalid order current status` quer dizer duas coisas OPOSTAS**: "ainda não foi paga" e
+"já foi cancelada". Como o código não distingue e a diferença muda tudo para quem está na tela, o
+provedor **pergunta** — uma leitura a mais só no caminho de falha — e devolve
+`BOOKING_ALREADY_CANCELLED` quando o cupom já está anulado.
+
+**`TicketDocInfo` vem em dois lugares com dois nomes de campo:** solto na resposta
+(`Ticket/TicketNumber`) ou em `DataLists/TicketDocInfoList` (`TicketDocNbr`). Lendo só o segundo,
+que é o que a amostra mostra, o `/issue` devolvia `tickets: []` numa emissão que tinha bilhete.
+
 **O void não devolve `StatusCode` nenhum.** Ele confirma em texto, num `MarketingMessage`:
 `VOID completed successfully`. Sem ler isso, um cancelamento que deu certo era publicado como
 `pending` — o contrário do que aconteceu. E o valor devolvido só aparece aí, no

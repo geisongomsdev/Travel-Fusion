@@ -14,9 +14,13 @@ import { AlertTriangle } from 'lucide-react';
  * para cancelar"; num quote seria "a oferta expirou".
  */
 const MESSAGES = {
+  BOOKING_ALREADY_CANCELLED: {
+    title: 'Esta passagem já foi cancelada',
+    body: 'Não há nada a fazer: a companhia já anulou o bilhete.',
+  },
   'RESOURCE_CONFLICT:cancelBooking': {
-    title: 'Esta reserva ainda não pode ser cancelada',
-    body: 'Ela ainda não foi paga. Reservas não pagas não precisam de cancelamento — expiram sozinhas no prazo da companhia.',
+    title: 'Ainda não dá para cancelar',
+    body: 'A companhia está processando algo nesta reserva. Aguarde um instante e tente de novo.',
   },
   'RESOURCE_CONFLICT:quote': {
     title: 'Esta oferta não está mais disponível',
