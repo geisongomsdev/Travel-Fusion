@@ -131,6 +131,35 @@ export class LatamProvider implements FlightProvider {
     const counters: Record<string, number> = { ADT: 0, CHD: 0, INF: 0 };
 
     /**
+     * E-mail e telefone são CSPs do nível da RESERVA (o /quote os declara com
+     * `perPassenger: false`), mas a NDC quer um ContactInfo por passageiro —
+     * então o mesmo contato é replicado, um por PaxID.
+     *
+     * 🔴 A LATAM EXIGE o contato: sem ele o OrderCreate volta
+     * `912 ContactInfoList is null or empty`. E omitir só a referência para
+     * fugir disso troca um erro por outro — vira
+     * `cvc-identity-constraint.4.3: Key 'ContactInfoIDKeyRef13' not found`.
+     * Os dois são a mesma coisa dita de dois jeitos: contato é obrigatório.
+     *
+     * Por isso a recusa acontece AQUI, antes da rede, com o campo que falta
+     * nomeado — do mesmo jeito que a credencial em branco falha no client.
+     */
+    const email = dto.customParameters?.email;
+    const phone = dto.customParameters?.phone;
+
+    if (!email && !phone) {
+      throw new AppError('SEARCH_VALIDATION_ERROR', {
+        metadata: { operation: 'createBooking' },
+        details: {
+          errors: {
+            'customParameters.email': ['Obrigatório: a LATAM exige contato para criar a ordem.'],
+            'customParameters.phone': ['Obrigatório: a LATAM exige contato para criar a ordem.'],
+          },
+        },
+      });
+    }
+
+    /**
      * 🔴 A ORDEM dos elementos é do XSD, não estética: `ContactInfoRefID`,
      * `IdentityDoc`, `Individual`, `PaxID`, `PTC` — e dentro do Individual,
      * `Birthdate` antes do nome. Fora dessa sequência a LATAM devolve
@@ -159,23 +188,14 @@ export class LatamProvider implements FlightProvider {
       };
     });
 
-    /**
-     * E-mail e telefone são CSPs do nível da RESERVA (o /quote os declara com
-     * `perPassenger: false`), mas a NDC quer um ContactInfo por passageiro —
-     * então o mesmo contato é replicado, um por PaxID.
-     */
-    const email = dto.customParameters?.email;
-    const phone = dto.customParameters?.phone;
-
-    const contacts = email || phone
-      ? paxList.map((pax) => ({
-        ContactInfoID: `${pax.PaxID}_CNT`,
-        EmailAddress: email ? { EmailAddressText: email } : undefined,
-        Phone: phone
-          ? { ContactTypeText: 'MOBILE', PhoneNumber: phone.replace(/\D/g, '') }
-          : undefined,
-      }))
-      : [];
+    // Um ContactInfo por PaxID, todos apontando para o mesmo contato da reserva.
+    const contacts = paxList.map((pax) => ({
+      ContactInfoID: `${pax.PaxID}_CNT`,
+      EmailAddress: email ? { EmailAddressText: email } : undefined,
+      Phone: phone
+        ? { ContactTypeText: 'MOBILE', PhoneNumber: phone.replace(/\D/g, '') }
+        : undefined,
+    }));
 
     const { payload } = await this.commands.orderCreate(key.r, key.i ?? null, paxList, contacts, context);
     return this.readOrder(payload, 'createBooking');

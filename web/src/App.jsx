@@ -85,11 +85,16 @@ export default function App() {
     }
   }
 
-  async function handleBook(passengers) {
+  /**
+   * @param passengers já vêm do formulário com o seu `customParameters`
+   *   (documento), porque isso é dado do passageiro, não da reserva.
+   * @param bookingParameters e-mail e telefone — o contato da reserva.
+   */
+  async function handleBook(passengers, bookingParameters = {}) {
     setRunning(true);
     setError(null);
     try {
-      // Os CSPs por passageiro e por reserva saem daqui e entram no ProcessTerms.
+      // Os CSPs escolhidos no /quote (bagagem da Travelfusion) entram aqui.
       const perPassenger = {};
       const perBooking = {};
       for (const parameter of quote?.requiredParameters || []) {
@@ -100,8 +105,12 @@ export default function App() {
 
       const response = await post('/booking', {
         identifier: selection.leg.identifier,
-        passengers: passengers.map((passenger) => ({ ...passenger, customParameters: perPassenger })),
-        customParameters: perBooking,
+        // O que o formulário mandou vence o CSP genérico: é mais específico.
+        passengers: passengers.map((passenger) => ({
+          ...passenger,
+          customParameters: { ...perPassenger, ...passenger.customParameters },
+        })),
+        customParameters: { ...perBooking, ...bookingParameters },
       });
       setBooking(response.data);
     } catch (bookingError) {

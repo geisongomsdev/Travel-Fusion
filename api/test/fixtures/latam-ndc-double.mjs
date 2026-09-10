@@ -330,6 +330,12 @@ const server = http.createServer((req, res) => {
     if (url.endsWith('/order/create')) {
       if (!/<OwnerCode>/.test(body)) return xml(schemaError('OwnerCode is expected'));
       if (!/<IndividualID>/.test(body)) return xml(schemaError('no value for the key IndividualIDKey'));
+      // A LATAM exige contato: sem ContactInfoList o OrderCreate volta 912.
+      if (!/<ContactInfoList>/.test(body)) return xml(schemaError("ContactInfoList is null or empty"));
+      // E com a lista, a referencia tem que existir — ou vao as duas, ou nenhuma.
+      if (!/<ContactInfoRefID>/.test(body)) {
+        return xml(schemaError("Key 'ContactInfoIDKeyRef13' not found"));
+      }
       return xml(ORDER_VIEW);
     }
 

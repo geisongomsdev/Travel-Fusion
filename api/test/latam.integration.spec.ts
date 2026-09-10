@@ -156,6 +156,7 @@ describe('LatamProvider ponta a ponta', () => {
         identifier: offer.outbound.identifier!,
         referenceDate: '2026-10-19',
         passengers: [{ firstName: 'Andy', lastName: 'Peterson', dateOfBirth: '1990-04-21' }],
+        customParameters: { email: 'andy@example.com', phone: '11999999999' },
       },
       {},
     );
@@ -163,6 +164,61 @@ describe('LatamProvider ponta a ponta', () => {
     expect(booking).toMatchObject({
       locator: 'NW6PFQ', committed: true, confirmed: true, status: 'CLOSED',
     });
+  });
+
+  /**
+   * 🔴 Reservar sem contato quebrava em produção com uma mensagem que não ajuda
+   * ninguém: ora `912 ContactInfoList is null or empty`, ora
+   * `cvc-identity-constraint.4.3: Key 'ContactInfoIDKeyRef13' not found`,
+   * dependendo de qual metade da dupla faltava. A recusa passa a acontecer
+   * ANTES da rede, nomeando o campo.
+   */
+  it('🔴 recusa reservar sem contato antes de sair para a rede', async () => {
+    const [offer] = await search('roundtrip');
+
+    await expect(
+      provider().book(
+        keyOf(offer),
+        {
+          identifier: offer.outbound.identifier!,
+          referenceDate: '2026-10-19',
+          passengers: [{ firstName: 'Andy', lastName: 'Peterson', dateOfBirth: '1990-04-21' }],
+        },
+        {},
+      ),
+    ).rejects.toMatchObject({
+      code: 'SEARCH_VALIDATION_ERROR',
+      details: { errors: expect.objectContaining({ 'customParameters.email': expect.any(Array) }) },
+    });
+  });
+
+  /**
+   * 🔴 O caso acima reserva SEM contato, e é exatamente o que quebrou: o Pax
+   * saía com `ContactInfoRefID` apontando para uma `ContactInfoList` que não
+   * era emitida, e a LATAM respondia `cvc-identity-constraint.4.3: Key
+   * 'ContactInfoIDKeyRef13' not found`. Este cobre o outro ramo — com contato,
+   * a lista tem que ir junto.
+   */
+  it('com e-mail e telefone, ContactInfoRefID e ContactInfoList andam juntos', async () => {
+    const [offer] = await search('roundtrip');
+
+    const booking = await provider().book(
+      keyOf(offer),
+      {
+        identifier: offer.outbound.identifier!,
+        referenceDate: '2026-10-19',
+        passengers: [{
+          firstName: 'Andy',
+          lastName: 'Peterson',
+          dateOfBirth: '1990-04-21',
+          customParameters: { documentNumber: 'AAB0302' },
+        }],
+        customParameters: { email: 'andy@example.com', phone: '11999999999' },
+      },
+      {},
+    );
+
+    expect(booking.locator).toBe('NW6PFQ');
   });
 
   it('consulta a reserva com todas as chaves do contrato', async () => {
