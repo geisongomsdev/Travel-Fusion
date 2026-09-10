@@ -331,10 +331,20 @@ export class LatamCommands {
    * Se a resposta se perder, o caminho é o OrderRetrieve — nunca cancelar de
    * novo, porque a primeira pode ter valido.
    */
-  async orderCancel(orderId: string, refundAmount: number, context: RequestContext): Promise<LatamResult> {
+  /**
+   * @param refundAmount `null` é o caso do **VOID**: quando o OrderReshop
+   *   responde "VOID permitted" em vez de calcular reembolso, a mensagem vai só
+   *   com o `OrderID` — é a mesma rota, e mandar um `ExpectedRefundAmount`
+   *   inventado seria afirmar um valor que a companhia não disse.
+   */
+  async orderCancel(
+    orderId: string,
+    refundAmount: number | null,
+    context: RequestContext,
+  ): Promise<LatamResult> {
     const inner = partyAndPos(context)
       + toXml('Request', {
-        ExpectedRefundAmount: { TotalAmount: refundAmount },
+        ExpectedRefundAmount: refundAmount === null ? undefined : { TotalAmount: refundAmount },
         Order: { OrderID: orderId, OwnerCode: OWNER_CODE },
       });
 

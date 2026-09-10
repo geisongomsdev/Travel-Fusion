@@ -108,3 +108,21 @@
     & svg { stroke-width: 1.5; opacity: 0.5; }
   }
 }
+
+/**
+ * Impressão do bilhete.
+ *
+ * 🔴 Some com a tela inteira e deixa só o `#voucher`. A alternativa seria
+ * montar uma segunda página só para imprimir — dois lugares para manter, e um
+ * deles ficaria desatualizado na primeira mudança.
+ */
+@media print {
+  body * { visibility: hidden; }
+  #voucher, #voucher * { visibility: visible; }
+  #voucher {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    padding: 0;
+  }
+}
