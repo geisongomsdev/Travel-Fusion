@@ -29,7 +29,7 @@ export function PaymentStep({
   onShowExtras,
   onVoucher,
   onCancel,
-  cancelled,
+  cancellation,
   children,
 }) {
   const [card, setCard] = useState({
@@ -68,7 +68,7 @@ export function PaymentStep({
       <PaymentResult
         issued={issued}
         running={running}
-        cancelled={cancelled}
+        cancellation={cancellation}
         onShowExtras={onShowExtras}
         onVoucher={onVoucher}
         onCancel={onCancel}
@@ -266,7 +266,8 @@ function Installments({ options, loading, chosen, amount, currency, onLoad, onCh
  * recusa o cancelamento com "estado inválido". Oferecer um botão que sempre
  * falha é pior do que não oferecer.
  */
-function PaymentResult({ issued, running, cancelled, onShowExtras, onVoucher, onCancel, children }) {
+function PaymentResult({ issued, running, cancellation, onShowExtras, onVoucher, onCancel, children }) {
+  const cancelled = Boolean(cancellation?.cancelled);
   const done = issued.issued;
 
   return (
@@ -292,7 +293,9 @@ function PaymentResult({ issued, running, cancelled, onShowExtras, onVoucher, on
               </p>
               <p className="text-sm text-muted-foreground">
                 {cancelled
-                  ? 'A companhia confirmou o cancelamento.'
+                  ? cancellation?.refund
+                    ? `A companhia confirmou o cancelamento e devolve ${formatMoney(cancellation.refund.total, cancellation.refund.currency)}.`
+                    : 'A companhia confirmou o cancelamento.'
                   : done
                     ? 'Está tudo certo. Dá para escolher assento e bagagem mesmo com a passagem já emitida.'
                     : 'A companhia ainda está fechando a cobrança. Atualize em instantes.'}
