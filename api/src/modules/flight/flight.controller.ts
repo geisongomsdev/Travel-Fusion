@@ -8,7 +8,7 @@ import { Operation, RawResponse } from '../../common/interceptors/envelope.inter
 import { notSupported } from '../../common/errors/app-error';
 import { RequestContext } from '../providers/provider.types';
 import { AvailabilityDto } from './dto/availability.dto';
-import { CancelBookingDto, CreateBookingDto, FareRulesDto, QuoteDto, RetrieveDto } from './dto/booking.dto';
+import { CancelBookingDto, CreateBookingDto, FareRulesDto, QuoteDto, RetrieveDto, SeatMapDto } from './dto/booking.dto';
 import { PingDto } from './dto/ping.dto';
 import { AvailabilityService } from './use-cases/availability.service';
 import { BookingService } from './use-cases/booking.service';
@@ -17,6 +17,7 @@ import { PingService } from './use-cases/ping.service';
 import { QuoteService } from './use-cases/quote.service';
 import { RetrieveService } from './use-cases/retrieve.service';
 import { CancelBookingService } from './use-cases/cancel-booking.service';
+import { SeatMapService } from './use-cases/seat-map.service';
 import { ERROR_RESPONSES, NOT_SUPPORTED_ROUTES } from './flight.swagger';
 
 type FlightRequest = Request & { correlationId?: string };
@@ -37,6 +38,7 @@ export class FlightController {
     private readonly booking: BookingService,
     private readonly retrieve: RetrieveService,
     private readonly cancel: CancelBookingService,
+    private readonly seats: SeatMapService,
     private readonly fareRules: FareRulesService,
     private readonly pingProbe: PingService,
   ) {}
@@ -226,9 +228,24 @@ export class FlightController {
 
   @Post('seat-map')
   @Capability('seatMap')
-  @ApiTags('Não suportado pelo provedor')
-  @ApiOperation(NOT_SUPPORTED_ROUTES.seatMap)
-  seatMap(): never { throw notSupported('seatMap'); }
+  @Operation('seatMap')
+  @ApiTags('Assentos')
+  @ApiOperation({
+    summary: 'Mapa de assentos da oferta',
+    description: [
+      'Read-only: não marca nada.',
+      '',
+      '🔴 **Divergência consciente do contrato canônico.** O `09-assentos.md` endereça o mapa',
+      'pelo LOCALIZADOR, assumindo escolha pós-reserva. Na LATAM o `/seats/availability`',
+      'responde pela OFERTA — a escolha é anterior, e o localizador ainda não existe.',
+      '',
+      'Mapa ilegível degrada para `segments: []`, nunca 500: a leitura degrada, a mutação falha.',
+    ].join('\n'),
+  })
+  @ApiBody({ type: SeatMapDto })
+  async seatMap(@Body() dto: SeatMapDto, @Req() request: FlightRequest) {
+    return this.seats.execute(dto, contextOf(request));
+  }
 
   @Post('mark-seats')
   @Capability('markSeats')

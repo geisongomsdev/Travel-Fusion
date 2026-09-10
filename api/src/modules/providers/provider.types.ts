@@ -114,6 +114,7 @@ export interface FlightProvider {
     retrieve: boolean;
     multicity: boolean;
     cancelBooking: boolean;
+    seatMap: boolean;
   };
 
   probe(context: RequestContext): Promise<ProviderProbe>;
@@ -133,6 +134,36 @@ export interface FlightProvider {
    * `supports.cancelBooking`, e o contrato responde 501 nos demais.
    */
   cancelBooking?(locator: string, context: RequestContext): Promise<ProviderCancellation>;
+
+  /**
+   * Mapa de assentos. Opcional, e endereçado pela CHAVE DA OFERTA — na LATAM a
+   * escolha acontece antes de reservar, e o localizador ainda não existe.
+   */
+  seatMap?(key: OfferKey, context: RequestContext): Promise<ProviderSeatMap>;
+}
+
+export interface ProviderSeat {
+  seat: string | null;
+  row: string | null;
+  column: string | null;
+  status: string;
+  available: boolean;
+  paid: boolean;
+  price: { total: number; currency: string | null } | null;
+  characteristic: string | null;
+  /** Opaco: identifica o assento na hora de comprar. Devolver intacto. */
+  offerItemId: string | null;
+}
+
+export interface ProviderSeatMap {
+  currency: string | null;
+  segments: Array<{
+    segmentId: string | null;
+    cabins: Array<{
+      cabinClass: string | null;
+      rows: Array<{ number: string | null; exitRow: boolean; seats: ProviderSeat[] }>;
+    }>;
+  }>;
 }
 
 /** O que o contrato precisa saber de um cancelamento. */

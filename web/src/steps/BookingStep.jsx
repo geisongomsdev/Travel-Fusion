@@ -1,19 +1,19 @@
 import { useState } from 'react';
-import { Loader2, RefreshCw, Ticket, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock, Loader2, RefreshCw, Ticket, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
-import { CodeBlock } from '@/components/sandbox/CodeBlock';
-import { Callout } from '@/components/sandbox/Callout';
-import { Endpoint } from '@/components/sandbox/Endpoint';
+import { formatMoney } from '@/lib/utils';
 
 /**
- * 🔴 Estes campos não são enfeite: são os `requiredParameters` que o `/quote`
- * declarou. `documentNumber` vai por passageiro; `email` e `phone` são do
- * nível da reserva, e a LATAM recusa o OrderCreate sem eles
- * (`912 ContactInfoList is null or empty`).
+ * 🔴 Os campos aqui não são escolha de tela: são os `requiredParameters` que o
+ * `/quote` declarou. `documentNumber` vai por passageiro; `email` e `phone` são
+ * da reserva, e a LATAM recusa a ordem sem eles.
+ *
+ * O que NÃO aparece: nome de mensagem NDC, URL de endpoint e aviso de
+ * idempotência. Isso é verdade da integração — vive no README e no código, não
+ * na frente de quem está comprando.
  */
 export function BookingStep({ onBook, running, booking, retrieved, cancellation, onRetrieve, onCancel }) {
   const [passenger, setPassenger] = useState({
@@ -50,9 +50,7 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
 
   const submit = (event) => {
     event.preventDefault();
-
     const { documentNumber, ...individual } = passenger;
-
     onBook(
       [{ ...individual, customParameters: { documentNumber } }],
       { email: contact.email, phone: contact.phone },
@@ -62,108 +60,73 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
   const incomplete = !contact.email && !contact.phone;
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+    <div className="mx-auto max-w-2xl">
       <Card>
         <CardHeader>
-          <CardTitle>Order Create</CardTitle>
-          <CardDescription>Segura o assento e devolve o localizador. Não cobra nada.</CardDescription>
+          <CardTitle>Quem vai viajar</CardTitle>
+          <CardDescription>
+            O nome precisa ser igual ao do documento apresentado no embarque.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-5">
-          <Endpoint method="POST" path="https://sandbox.api.latam.com/ndc/v192/order/create" />
-
-          <form className="space-y-5" onSubmit={submit}>
-            <fieldset className="space-y-4">
-              <legend className="text-sm font-medium">Passageiro</legend>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="title">Tratamento</Label>
-                  <Input id="title" value={passenger.title} onChange={updatePassenger('title')} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="dateOfBirth">Nascimento</Label>
-                  <Input
-                    id="dateOfBirth"
-                    type="date"
-                    value={passenger.dateOfBirth}
-                    onChange={updatePassenger('dateOfBirth')}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="firstName">Nome</Label>
-                  <Input id="firstName" value={passenger.firstName} onChange={updatePassenger('firstName')} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="lastName">Sobrenome</Label>
-                  <Input id="lastName" value={passenger.lastName} onChange={updatePassenger('lastName')} />
-                </div>
-                <div className="space-y-1.5 sm:col-span-2">
-                  <Label htmlFor="documentNumber">
-                    Documento
-                    <code className="font-mono text-xs font-normal text-muted-foreground">IdentityDoc</code>
-                  </Label>
-                  <Input
-                    id="documentNumber"
-                    value={passenger.documentNumber}
-                    onChange={updatePassenger('documentNumber')}
-                    placeholder="AAB0302"
-                  />
-                </div>
+        <CardContent>
+          <form className="space-y-6" onSubmit={submit}>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="firstName">Nome</Label>
+                <Input id="firstName" value={passenger.firstName} onChange={updatePassenger('firstName')} />
               </div>
-            </fieldset>
+              <div className="space-y-1.5">
+                <Label htmlFor="lastName">Sobrenome</Label>
+                <Input id="lastName" value={passenger.lastName} onChange={updatePassenger('lastName')} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="title">Tratamento</Label>
+                <Input id="title" value={passenger.title} onChange={updatePassenger('title')} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="dateOfBirth">Data de nascimento</Label>
+                <Input
+                  id="dateOfBirth"
+                  type="date"
+                  value={passenger.dateOfBirth}
+                  onChange={updatePassenger('dateOfBirth')}
+                />
+              </div>
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor="documentNumber">Documento</Label>
+                <Input
+                  id="documentNumber"
+                  value={passenger.documentNumber}
+                  onChange={updatePassenger('documentNumber')}
+                  placeholder="Passaporte ou RG"
+                />
+              </div>
+            </div>
 
-            <fieldset className="space-y-4">
-              <legend className="text-sm font-medium">Contato da reserva</legend>
+            <div className="space-y-4 border-t pt-6">
+              <div>
+                <p className="text-sm font-medium">Contato</p>
+                <p className="text-sm text-muted-foreground">
+                  A companhia usa estes dados para avisar sobre mudanças no voo.
+                </p>
+              </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label htmlFor="email">E-mail</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    value={contact.email}
-                    onChange={updateContact('email')}
-                    placeholder="test@mail.com"
-                  />
+                  <Input id="email" type="email" value={contact.email} onChange={updateContact('email')} />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="phone">Telefone</Label>
-                  <Input
-                    id="phone"
-                    value={contact.phone}
-                    onChange={updateContact('phone')}
-                    placeholder="11999999999"
-                  />
+                  <Input id="phone" value={contact.phone} onChange={updateContact('phone')} />
                 </div>
               </div>
-            </fieldset>
+            </div>
 
-            <Callout tone="note" title="Note">
-              O PTC sai da idade na <strong>data do voo</strong> — em ida-e-volta, na data da volta.
-              A LATAM recusa a ordem quando o PTC não bate com o Birthdate.
-            </Callout>
-
-            <Button type="submit" size="lg" disabled={running || incomplete}>
+            <Button type="submit" size="lg" disabled={running || incomplete} className="w-full sm:w-auto">
               {running ? <Loader2 className="animate-spin" /> : <Ticket />}
-              {running ? 'Reservando…' : 'Reservar'}
+              {running ? 'Reservando…' : 'Confirmar reserva'}
             </Button>
           </form>
-        </CardContent>
-      </Card>
-
-      <Card className="h-fit">
-        <CardHeader>
-          <CardTitle>Advice</CardTitle>
-          <CardDescription>Antes de apertar o botão.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Callout tone="advice" title="OrderCreate não é idempotente">
-            Esta é a única mutação do fluxo, e ela roda <strong>sem retry</strong>. Se a resposta se
-            perder, o caminho é o <code className="font-mono text-xs">OrderRetrieve</code> — nunca
-            reservar de novo.
-          </Callout>
-          <Callout tone="note" title="Note">
-            Contato é obrigatório: sem <code className="font-mono text-xs">ContactInfoList</code> a
-            LATAM responde <strong>912</strong>. A API recusa antes de sair para a rede.
-          </Callout>
         </CardContent>
       </Card>
     </div>
@@ -171,140 +134,74 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
 }
 
 /**
- * `committed` e `confirmed` são coisas diferentes e a tela precisa mostrar as duas.
- * committed sem confirmed = a reserva pode existir do outro lado. A ação é ESPERAR,
- * nunca reservar de novo.
+ * 🔴 `committed` e `confirmed` são coisas diferentes, e a distinção IMPORTA
+ * para quem comprou — só o vocabulário muda. "Aguardando confirmação" diz a
+ * mesma coisa que `committed && !confirmed` sem exigir que o passageiro saiba
+ * o que é polling.
  */
 function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, onCancel }) {
   const pending = booking.committed && !booking.confirmed;
+  const status = retrieved?.status ?? (booking.confirmed ? 'confirmed' : 'pending');
+  const cancelled = cancellation?.cancelled || status === 'cancelled';
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+    <div className="mx-auto max-w-2xl space-y-5">
       <Card>
-        <CardHeader>
-          <CardTitle>Order View</CardTitle>
-          <CardDescription>Localizador e estado devolvidos pelo provedor.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-5 pt-2">
+          <div className="flex items-start gap-3">
+            {cancelled ? (
+              <XCircle className="mt-0.5 size-5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+            ) : pending ? (
+              <Clock className="mt-0.5 size-5 shrink-0 text-amber-500" strokeWidth={1.5} />
+            ) : (
+              <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-emerald-600" strokeWidth={1.5} />
+            )}
+            <div>
+              <p className="font-medium">
+                {cancelled
+                  ? 'Reserva cancelada'
+                  : pending
+                    ? 'Reserva recebida'
+                    : 'Reserva confirmada'}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {cancelled
+                  ? 'O assento foi liberado.'
+                  : pending
+                    ? 'A companhia está confirmando. Você pode acompanhar por aqui.'
+                    : 'Tudo certo. Guarde o localizador.'}
+              </p>
+            </div>
+          </div>
+
           <div className="rounded-lg border bg-muted/50 px-4 py-3">
             <p className="text-xs text-muted-foreground">Localizador</p>
-            <p className="font-mono text-2xl font-semibold">{booking.locator || '—'}</p>
+            <p className="font-mono text-2xl font-semibold tracking-wide">{booking.locator || '—'}</p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={booking.committed ? 'success' : 'secondary'}>
-              committed: {String(booking.committed)}
-            </Badge>
-            <Badge variant={booking.confirmed ? 'success' : 'warning'}>
-              confirmed: {String(booking.confirmed)}
-            </Badge>
-            <Badge variant="outline">{booking.status}</Badge>
+          {cancellation?.refund && (
+            <p className="text-sm text-muted-foreground">
+              Reembolso de{' '}
+              <span className="font-medium text-foreground">
+                {formatMoney(cancellation.refund.total, cancellation.refund.currency)}
+              </span>
+              .
+            </p>
+          )}
+
+          <div className="flex flex-wrap gap-2 border-t pt-4">
+            <Button variant="outline" disabled={running} onClick={() => onRetrieve(booking.locator)}>
+              {running ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              Atualizar
+            </Button>
+            {!cancelled && (
+              <Button variant="ghost" disabled={running} onClick={() => onCancel(booking.locator)}>
+                Cancelar reserva
+              </Button>
+            )}
           </div>
-
-          {pending && (
-            <Callout tone="advice" title="Aceita, ainda não confirmada">
-              O polling continua. <strong>Não reserve de novo:</strong> ela pode já existir do lado do
-              fornecedor. Consulte por <code className="font-mono text-xs">/retrieve</code>.
-            </Callout>
-          )}
-
-          {booking.confirmed && (
-            <Callout tone="success" title="Reserva confirmada">
-              A emissão (<code className="font-mono text-xs">/issue</code>) responde 501 neste
-              provedor: na Travelfusion o <code className="font-mono text-xs">StartBooking</code> já
-              cobra, então não existe emissão separada.
-            </Callout>
-          )}
         </CardContent>
       </Card>
-
-      <div className="space-y-5">
-        <Card>
-          <CardHeader>
-            <CardTitle>Pós-venda</CardTitle>
-            <CardDescription>As duas rotas do contrato que operam sobre a reserva feita.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Endpoint method="POST" path="/retrieve" note="Leitura ao vivo, sem cache: pergunta à companhia." />
-            <Button
-              variant="outline"
-              className="w-full"
-              disabled={running}
-              onClick={() => onRetrieve(booking.locator)}
-            >
-              {running ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-              Consultar estado
-            </Button>
-
-            <Endpoint
-              method="POST"
-              path="/cancel-booking"
-              note="OrderReshop calcula o reembolso, OrderCancel executa."
-            />
-            <Button
-              variant="destructive"
-              className="w-full"
-              disabled={running || cancellation?.cancelled}
-              onClick={() => onCancel(booking.locator)}
-            >
-              {running ? <Loader2 className="animate-spin" /> : <XCircle />}
-              {cancellation?.cancelled ? 'Cancelada' : 'Cancelar reserva'}
-            </Button>
-
-            <Callout tone="advice" title="Sem retry">
-              Cancelar é mutação e roda uma vez só. Se a resposta se perder, consulte o estado — não
-              cancele de novo.
-            </Callout>
-          </CardContent>
-        </Card>
-
-        {cancellation && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Cancelamento</CardTitle>
-              <CardDescription>
-                {/* `pending` NÃO é cancelado: a companhia aceitou e ainda não fechou. */}
-                {cancellation.cancelled
-                  ? 'A companhia confirmou o cancelamento.'
-                  : 'Aceito, ainda não fechado — consulte o estado.'}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant={cancellation.cancelled ? 'success' : 'warning'}>
-                  {cancellation.status}
-                </Badge>
-                {cancellation.refund && (
-                  <Badge variant="outline">
-                    reembolso {cancellation.refund.currency} {cancellation.refund.total}
-                  </Badge>
-                )}
-              </div>
-              <CodeBlock
-                code={JSON.stringify(cancellation, null, 2)}
-                language="json"
-                title="cancelamento"
-                maxHeight="14rem"
-              />
-            </CardContent>
-          </Card>
-        )}
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Resposta</CardTitle>
-            <CardDescription>O corpo cru, como veio do contrato.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <CodeBlock
-              code={JSON.stringify(retrieved ?? booking, null, 2)}
-              language="json"
-              title={retrieved ? 'retrieve' : 'booking'}
-              maxHeight="20rem"
-            />
-          </CardContent>
-        </Card>
-      </div>
     </div>
   );
 }

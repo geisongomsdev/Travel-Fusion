@@ -8,11 +8,12 @@ import { AvailabilityDto } from '../../flight/dto/availability.dto';
 import { CreateBookingDto, QuoteDto } from '../../flight/dto/booking.dto';
 import {
   FareRuleSection, FlightProvider, ProviderBooking, ProviderOffer, ProviderProbe, ProviderQuote,
-  ProviderCancellation, ProviderRetrieval, RequestContext,
+  ProviderCancellation, ProviderRetrieval, ProviderSeatMap, RequestContext,
 } from '../provider.types';
 import { asList, attr, child, num, text, XmlValue } from '../../../common/xml/xml.util';
 import { buildPaxList, LatamCommands } from './latam.commands';
 import { normalizeAirShopping } from './normalizers/offer.normalizer';
+import { normalizeSeatMap } from './normalizers/seat.normalizer';
 
 /**
  * Status de ordem da LATAM que são FINAIS. Só eles autorizam dizer `confirmed`.
@@ -41,6 +42,8 @@ export class LatamProvider implements FlightProvider {
     multicity: true,
     // OrderReshop calcula o reembolso, OrderCancel executa. As duas rotas existem.
     cancelBooking: true,
+    // /seats/availability está no YAML publicado e responde pela oferta.
+    seatMap: true,
   };
 
   constructor(private readonly commands: LatamCommands) {}
@@ -285,6 +288,25 @@ export class LatamProvider implements FlightProvider {
     }
 
     return null;
+  }
+
+  /**
+   * Mapa de assentos da oferta.
+   *
+   * 🔴 Endereçado pela OFERTA, não pelo localizador: na LATAM a escolha de
+   * assento é anterior à reserva. Os PaxIDs vêm da chave, pelo mesmo motivo do
+   * OfferPrice — a companhia devolve o mapa por passageiro.
+   */
+  async seatMap(key: OfferKey, context: RequestContext): Promise<ProviderSeatMap> {
+    /**
+     * 🔴 Aqui o `OfferID` é o `SEI|…` do ITEM, não o UUID da oferta — a amostra
+     * do portal usa esse formato e o gateway confirma: com o UUID ele responde
+     * `911 Public flight offer not found in cache by id <uuid>`. É a mesma
+     * palavra (`OfferID`) valendo coisas diferentes em duas mensagens.
+     */
+    const offerId = key.i ?? key.r;
+    const { payload } = await this.commands.seatAvailability(offerId, key.x ?? [], context);
+    return normalizeSeatMap(payload);
   }
 
   async retrieve(locator: string, context: RequestContext): Promise<ProviderRetrieval> {

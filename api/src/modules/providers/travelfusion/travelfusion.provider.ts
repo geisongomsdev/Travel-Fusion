@@ -49,6 +49,8 @@ export class TravelfusionProvider implements FlightProvider {
     // A Travelfusion não separa reservar de comprar: o `StartBooking` já cobra,
     // então cancelar seria estorno — coisa que o Direct Connect não expõe.
     cancelBooking: false,
+    // Depende do fornecedor por trás do agregador; o Direct Connect não expõe.
+    seatMap: false,
   };
 
   constructor(private readonly commands: TravelfusionCommands) {}

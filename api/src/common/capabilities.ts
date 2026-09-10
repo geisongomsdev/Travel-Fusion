@@ -66,8 +66,9 @@ export const LATAM_CAPABILITIES: Record<FlightOperation, boolean> = {
    */
   fareRules:        false,
 
+  seatMap:          true,   // /seats/availability, pela oferta
+
   // Existem na NDC, ainda nao integrados aqui — divida nossa, nao ausencia deles.
-  seatMap:          false,
   markSeats:        false,
   removeSeats:      false,
   ancillaries:      false,

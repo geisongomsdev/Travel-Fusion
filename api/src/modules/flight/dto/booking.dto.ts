@@ -141,3 +141,10 @@ export class CancelBookingDto {
   @Type(() => RetrieveBookingAddressDto)
   booking!: RetrieveBookingAddressDto;
 }
+
+/** O mapa de assentos é endereçado pela OFERTA — ver `SeatMapService`. */
+export class SeatMapDto {
+  @ApiProperty({ description: 'O identifier opaco vindo da busca. Devolva intacto, nunca interprete.' })
+  @IsString()
+  identifier!: string;
+}

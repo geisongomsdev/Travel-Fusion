@@ -1,101 +1,104 @@
+import { useState } from 'react';
+import { ArmchairIcon, ArrowRight, Plane } from 'lucide-react';
+import { SeatMapDialog } from '@/components/SeatMapDialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { CodeBlock } from '@/components/sandbox/CodeBlock';
-import { Callout } from '@/components/sandbox/Callout';
-import { Endpoint } from '@/components/sandbox/Endpoint';
-import { FieldTable } from '@/components/sandbox/FieldTable';
-import { cn, formatMoney } from '@/lib/utils';
+import { cn, formatMoney, formatTime } from '@/lib/utils';
 
 /**
- * Tarifar = OfferPrice na LATAM, ProcessDetails na Travelfusion. É aqui que os
- * `requiredParameters` aparecem — o que o provedor vai exigir na reserva.
+ * Tarifar = OfferPrice na LATAM, ProcessDetails na Travelfusion.
  *
- * A tabela é a mesma das páginas de operação do sandbox
- * (`Field Name | Type | Accepted Values | Required`), porque descreve a mesma
- * coisa: os campos da próxima mensagem.
+ * 🔴 Esta tela é de QUEM COMPRA. O nome da mensagem do provedor, a URL do
+ * endpoint e os avisos de idempotência não entram: são verdade da integração,
+ * não do passageiro. O que sobra aqui é o que muda a decisão de comprar —
+ * o voo, o preço aberto e os opcionais.
  */
+export function QuoteStep({
+  quote, selection, onContinue, onChangeParameter, parameters,
+  seatMap, seat, loadingSeats, onLoadSeatMap, onSelectSeat,
+}) {
+  const [seatsOpen, setSeatsOpen] = useState(false);
 
-/** Exemplos tirados da tabela de campos do `operations/order-create.md`. */
-const EXAMPLE = {
-  firstName: 'Andy — min 2 / max 28 letras',
-  lastName: 'Peterson — min 2 / max 28 letras',
-  dateOfBirth: '1990-04-21',
-  documentNumber: 'AAB0302',
-  email: 'test@mail.com',
-  phone: '11999999999',
-};
+  const openSeats = () => {
+    setSeatsOpen(true);
+    // Busca uma vez só: o mapa não muda enquanto a tela está aberta.
+    if (!seatMap) onLoadSeatMap();
+  };
 
-const TYPE_LABEL = {
-  string: 'A-z Token',
-  date: 'ISO Date',
-  email: 'Email',
-  number: '0-9 Token',
-};
-
-export function QuoteStep({ quote, selection, onContinue, onChangeParameter, parameters }) {
   if (!quote) return null;
   const { price, requiredParameters = [] } = quote;
 
-  const rows = requiredParameters.map((parameter) => ({
-    name: parameter.name,
-    type: TYPE_LABEL[parameter.type] ?? parameter.type ?? 'A-z Token',
-    example: EXAMPLE[parameter.name] ?? parameter.displayText ?? '—',
-    required: !parameter.optional,
-  }));
-
-  // Parâmetros com opções de preço (a bagagem da Travelfusion) viram escolha.
+  // Só os que têm opção de escolha viram tela; os de texto livre são coletados
+  // no passo seguinte, junto com o passageiro.
   const selectable = requiredParameters.filter((parameter) => parameter.options?.length > 0);
+  const leg = selection?.leg;
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
       <div className="space-y-5">
         <Card>
           <CardHeader>
-            <CardTitle>Offer Price</CardTitle>
-            <CardDescription>Confirma o preço da oferta escolhida, sem margem nem estimativa.</CardDescription>
+            <CardTitle>Seu voo</CardTitle>
+            <CardDescription>Confira antes de continuar.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <Endpoint
-              method="POST"
-              path="https://sandbox.api.latam.com/ndc/v192/offerPrice"
-              note="Atenção ao camelCase: /offerprice responde 404 Invalid url."
-            />
-            <Callout tone="advice" title="Advice">
-              Os valores do AirShopping são para <strong>1 ADT</strong>. Em ofertas multi-pax é o
-              OfferPrice que devolve o preço real do total de passageiros.
-            </Callout>
+          <CardContent>
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex size-10 items-center justify-center rounded-full bg-muted">
+                <Plane className="size-4 text-muted-foreground" strokeWidth={1.5} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 font-medium tabular-nums">
+                  <span>{formatTime(leg?.time?.departure)}</span>
+                  <ArrowRight className="size-3 text-muted-foreground" />
+                  <span>{formatTime(leg?.time?.arrival)}</span>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {leg?.origin?.code} → {leg?.destination?.code}
+                  {leg?.company?.name || leg?.company?.code ? ` · ${leg.company.name ?? leg.company.code}` : ''}
+                  {selection?.fare?.family ? ` · ${selection.fare.family}` : ''}
+                </p>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
-        {rows.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>O que o OrderCreate vai exigir</CardTitle>
-              <CardDescription>Declarado pelo provedor nesta tarifação. Junte tudo antes de reservar.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <FieldTable rows={rows} />
-            </CardContent>
-          </Card>
-        )}
+        <Card>
+          <CardHeader>
+            <CardTitle>Assento</CardTitle>
+            <CardDescription>Escolha onde sentar, ou deixe a companhia decidir no check-in.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 items-center justify-center rounded-full bg-muted">
+                <ArmchairIcon className="size-4 text-muted-foreground" strokeWidth={1.5} />
+              </div>
+              <div>
+                <p className="text-sm font-medium">{seat ? `Assento ${seat.seat}` : 'Nenhum assento escolhido'}</p>
+                {seat?.price && (
+                  <p className="text-sm text-muted-foreground">
+                    {formatMoney(seat.price.total, seat.price.currency)}
+                  </p>
+                )}
+              </div>
+            </div>
+            <Button variant="outline" onClick={openSeats}>
+              {seat ? 'Trocar assento' : 'Escolher assento'}
+            </Button>
+          </CardContent>
+        </Card>
 
         {selectable.length > 0 && (
           <Card>
             <CardHeader>
-              <CardTitle>Serviços opcionais</CardTitle>
+              <CardTitle>Bagagem e serviços</CardTitle>
               <CardDescription>
-                O ProcessTerms é ÚNICO: o que não for escolhido agora não tem segunda chance.
+                Escolha agora — depois da reserva estes itens não podem mais ser adicionados.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {selectable.map((parameter) => (
                 <div key={parameter.name} className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium">{labelFor(parameter.name)}</span>
-                    <code className="font-mono text-[11px] text-muted-foreground">{parameter.name}</code>
-                    <Badge variant="outline">{parameter.perPassenger ? 'por passageiro' : 'por reserva'}</Badge>
-                  </div>
+                  <p className="text-sm font-medium">{labelFor(parameter.name)}</p>
                   {parameter.options.map((option) => {
                     const selected = parameters[parameter.name] === option.value;
                     return (
@@ -115,7 +118,7 @@ export function QuoteStep({ quote, selection, onContinue, onChangeParameter, par
                           {option.weightKg !== null && ` · ${option.weightKg}kg`}
                           {option.quantity === null && option.weightKg === null && option.label}
                         </span>
-                        <span className="font-semibold">
+                        <span className="font-semibold tabular-nums">
                           {option.price ? formatMoney(option.price.total, option.price.currency) : '—'}
                         </span>
                       </button>
@@ -130,25 +133,33 @@ export function QuoteStep({ quote, selection, onContinue, onChangeParameter, par
 
       <Card className="h-fit lg:sticky lg:top-5">
         <CardHeader>
-          <CardTitle>Preço firme</CardTitle>
-          <CardDescription>
-            {selection?.leg?.origin?.code} → {selection?.leg?.destination?.code}
-            {selection?.fare?.family ? ` · ${selection.fare.family}` : ''}
-          </CardDescription>
+          <CardTitle>Resumo</CardTitle>
+          <CardDescription>Preço confirmado pela companhia agora.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <Row label="Tarifa" value={formatMoney(price?.base, price?.currency)} />
-          <Row label="Taxas" value={formatMoney(price?.taxes?.boarding, price?.currency)} />
-          <Row label="Taxa de distribuição" value={formatMoney(price?.fees, price?.currency)} />
-          <div className="border-t border-border pt-3">
+          <Row label="Taxas e impostos" value={formatMoney(price?.taxes?.boarding, price?.currency)} />
+          {price?.fees > 0 && <Row label="Taxa de serviço" value={formatMoney(price.fees, price.currency)} />}
+          <div className="border-t pt-3">
             <Row label="Total" value={formatMoney(price?.total, price?.currency)} strong />
           </div>
           <Button size="lg" className="w-full" onClick={onContinue}>
-            Reservar
+            Continuar
           </Button>
-          <CodeBlock code={JSON.stringify(price, null, 2)} language="json" title="price" maxHeight="13rem" />
+          <p className="text-center text-xs text-muted-foreground">
+            A reserva segura o assento e não cobra nada agora.
+          </p>
         </CardContent>
       </Card>
+
+      <SeatMapDialog
+        open={seatsOpen}
+        onOpenChange={setSeatsOpen}
+        seatMap={seatMap}
+        loading={loadingSeats}
+        selected={seat?.seat ?? null}
+        onSelect={onSelectSeat}
+      />
     </div>
   );
 }
@@ -157,7 +168,7 @@ function Row({ label, value, strong }) {
   return (
     <div className="flex items-center justify-between text-sm">
       <span className="text-muted-foreground">{label}</span>
-      <span className={strong ? 'text-lg font-semibold text-primary' : 'font-medium'}>{value}</span>
+      <span className={cn('tabular-nums', strong ? 'text-lg font-semibold' : 'font-medium')}>{value}</span>
     </div>
   );
 }

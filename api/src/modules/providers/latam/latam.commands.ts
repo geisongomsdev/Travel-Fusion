@@ -24,6 +24,7 @@ export const PATHS = {
   orderRetrieve: process.env.LATAM_PATH_ORDER_RETRIEVE ?? '/ndc/v192/order/retrieve',
   orderCancel: process.env.LATAM_PATH_ORDER_CANCEL ?? '/ndc/v192/order/cancel',
   orderReshop: process.env.LATAM_PATH_ORDER_RESHOP ?? '/ndc/v192/order/reshop',
+  seatAvailability: process.env.LATAM_PATH_SEATS ?? '/ndc/v192/seats/availability',
 };
 
 /** Envelope NDC: cada mensagem tem o SEU namespace, derivado do nome. */
@@ -211,6 +212,30 @@ export class LatamCommands {
       });
 
     return this.client.send('OrderRetrieve', PATHS.orderRetrieve, envelope('IATA_OrderRetrieveRQ', inner), context);
+  }
+
+  /**
+   * SeatAvailability = o mapa de assentos.
+   *
+   * 🔴 É endereçado pela OFERTA, não pelo localizador: na LATAM a escolha de
+   * assento acontece ANTES de reservar. O contrato canônico modela `/seat-map`
+   * sobre a reserva, e essa divergência está documentada no README — aqui o
+   * `identifier` da oferta faz o papel do localizador.
+   */
+  async seatAvailability(offerId: string, paxIds: string[], context: RequestContext): Promise<LatamResult> {
+    const pax = paxIds.length > 0 ? paxIds : ['ADT_1'];
+
+    const inner = partyAndPos(context)
+      + `<Request>${toXml('CoreRequest', { Offer: { OfferID: offerId } })}`
+      + toXml('Pax', pax.map((paxId) => ({ PaxID: paxId, PTC: paxId.split('_')[0] })))
+      + '</Request>';
+
+    return this.client.send(
+      'SeatAvailability',
+      PATHS.seatAvailability,
+      envelope('IATA_SeatAvailabilityRQ', inner),
+      context,
+    );
   }
 
   /**
