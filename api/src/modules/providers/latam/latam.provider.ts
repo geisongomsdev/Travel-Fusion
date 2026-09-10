@@ -279,17 +279,43 @@ export class LatamProvider implements FlightProvider {
       ?? text(child(payload, 'Order', 'OrderStatusCode'))
       ?? '').toUpperCase();
 
+    /**
+     * 🔴 O VOID não devolve `StatusCode` nenhum: ele confirma em texto, num
+     * `MarketingMessage` — `VOID completed successfully`. Sem ler isso, um
+     * cancelamento que deu certo era publicado como "pendente", que é o
+     * contrário do que aconteceu.
+     *
+     * A leitura é estrita de propósito: só `completed`/`success` contam. Um
+     * texto que a companhia mude para outra coisa vira pendente, e pendente
+     * manda consultar — nunca afirma o que não foi dito.
+     */
+    const message = (text(child(payload, 'OrderCancelProcessing', 'MarketingMessage', 'Desc', 'DescText')) ?? '')
+      .toUpperCase();
+    const voided = message.includes('COMPLETED') || message.includes('SUCCESS');
+
+    /**
+     * 🔴 No void o valor devolvido só aparece DEPOIS, na resposta do cancelamento
+     * — o OrderReshop não calculou nada. A companhia declara
+     * `PaymentStatusCode: REFUNDED` junto do `Amount`, e é esse número que vale
+     * dizer a quem cancelou. Só publicamos com o status declarado: um `Amount`
+     * sem `REFUNDED` é o que foi pago, não o que volta.
+     */
+    const payment = child(payload, 'TicketDocInfo', 'PaymentInfo');
+    const refunded = (text(child(payment, 'PaymentStatusCode')) ?? '').toUpperCase() === 'REFUNDED'
+      ? amount(child(payment, 'Amount'))
+      : { value: null, currency: null };
+
+    const declared = refund ?? (refunded.value === null
+      ? null
+      : { total: roundMoney(refunded.value) ?? refunded.value, currency: refunded.currency });
+
     return {
       locator,
       // Só os status finais de falha significam cancelado de verdade.
-      status: FAILED_STATUSES.has(status) ? 'cancelled' : 'pending',
-      rawStatus: status || null,
-      /**
-       * `null` no void é DELIBERADO: a companhia anulou o bilhete sem declarar
-       * valor, e publicar o total pago como se fosse reembolso confirmado seria
-       * afirmar o que ela não afirmou.
-       */
-      refund,
+      status: FAILED_STATUSES.has(status) || voided ? 'cancelled' : 'pending',
+      rawStatus: status || message || null,
+      /** `null` continua sendo resposta válida: a companhia pode não declarar valor. */
+      refund: declared,
     };
   }
 

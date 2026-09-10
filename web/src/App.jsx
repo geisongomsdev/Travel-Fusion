@@ -398,7 +398,7 @@ export default function App() {
             onLoadInstallments={handleInstallments}
             issued={issued}
             onPay={handlePay}
-            cancelled={Boolean(cancellation?.cancelled) || retrieved?.status === 'cancelled'}
+            cancellation={cancellation}
             onVoucher={() => setVoucherOpen(true)}
             onCancel={() => handleCancel(booking.locator)}
             onShowExtras={() => {

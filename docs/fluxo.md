@@ -43,15 +43,21 @@ mentira. Tudo aqui foi testado contra o sandbox de verdade deles, não contra si
 
 ## O caminho completo, passo a passo
 
-São seis passos na tela. Cada um é uma conversa separada com a companhia.
+São **cinco passos** na tela. Cada um é uma conversa separada com a companhia.
 
 ```
-   1              2             3            4           5           6
-Buscar  →     Escolher  →   Revisar   →  Passageiro →  Pagar  →   Extras
-   │              │             │            │           │           │
-AirShopping   (só tela)    OfferPrice   OrderCreate  OrderChange  OrderChange
-                                                                     24.1
+   1              2             3            4            5
+Buscar   →    Escolher   →   Revisar   →  Passageiro →  Pagar
+   │              │             │            │            │
+AirShopping   (só tela)    OfferPrice   OrderCreate   OrderChange
+                                                          │
+                                        com a passagem na mão:
+                                    bilhete · assento e bagagem · cancelar
 ```
+
+Repare que **assento, bagagem e cancelamento não são passos**. Eles não têm ordem nem
+"próximo": são coisas que você faz com a passagem depois de comprada, quando e se quiser. Colocá-los
+como etapa daria a entender que o processo só termina depois de passar por eles.
 
 A coluna de baixo é o nome que a LATAM dá a cada conversa. Você não precisa decorar — só saber
 que **cada passo é uma pergunta nova para a companhia**, não um pedaço guardado do passo anterior.
@@ -96,7 +102,7 @@ o tipo de coisa que muda de preço e acaba. Aqui podem acontecer três coisas:
 - a tarifa acabou → alguém comprou os últimos lugares.
 
 Nesta tela também aparecem **assentos e bagagens** disponíveis, só para você ver. Guarde esta
-informação, ela volta no passo 6 com uma pegadinha.
+informação, ela volta depois do pagamento com uma pegadinha.
 
 ---
 
@@ -141,9 +147,31 @@ a chamada e somem com ela.
 
 ---
 
-### Passo 6 — Extras (assento e bagagem)
+### Com a passagem na mão
 
-Agora que a passagem está paga, dá para comprar assento marcado e bagagem extra.
+Pago o voo, a mesma tela passa a mostrar três coisas — e nenhuma delas é obrigatória.
+
+**Ver o bilhete.** Um comprovante com localizador, passageiro, voo, horário e valor pago, que dá
+para imprimir ou salvar em PDF pelo próprio navegador. Ele **não** é montado com o que a tela
+guardou: é montado com o que a companhia responde quando perguntamos de novo pela reserva. Um
+comprovante que repete a nossa própria anotação mostraria o que a gente acha, não o que foi
+registrado.
+
+**Escolher assento e bagagem** — mesmo com a passagem já emitida. É cobrado à parte.
+
+**Cancelar.** E aqui está o motivo de o botão viver *nesta* tela e não na anterior:
+
+> Antes de pagar **não há o que cancelar**. A reserva não paga expira sozinha no prazo, e a
+> companhia recusa o pedido dizendo que o estado é inválido. Um botão que sempre falha é pior do que
+> botão nenhum.
+
+Cancelar, aliás, são **duas operações diferentes**, e quem escolhe é a companhia: se ainda está
+dentro da janela de arrependimento, ela **anula** o bilhete (o cupom fica marcado como anulado); se
+já passou, ela calcula um **reembolso** e devolve o valor. A gente pergunta primeiro qual dos dois
+é o caso, e só então cancela. Nos testes, o cancelamento voltou "anulação concluída" com
+R$ 1.023,18 declarados como devolvidos.
+
+#### E a compra de assento e bagagem
 
 **A pegadinha que custou meio dia de investigação:**
 
@@ -158,21 +186,18 @@ Usar o primeiro na hora de comprar fazia a LATAM responder um erro que parecia f
 ("tipos de oferta misturados"). Descobrir que eram **dois catálogos diferentes**, e não um catálogo
 com um problema, foi o que destravou.
 
-É por isso que existem duas telas de assento no sistema: a do passo 3, que é vitrine, e a do passo
-6, que é loja.
+É por isso que existem duas telas de assento no sistema: a do passo 3, que é **vitrine**, e a de
+depois do pagamento, que é **loja**.
 
 ---
 
-## E depois da compra?
+## Consultar, a qualquer momento
 
-Duas coisas continuam disponíveis a qualquer momento, só com o localizador:
+Além de tudo isso, dá para perguntar à companhia como está a reserva agora, só com o localizador.
 
-**Consultar** — pergunta à companhia como está a reserva agora. Repare: ela **não lê o que a gente
-guardou**, ela pergunta de novo. É a diferença entre "o que eu anotei" e "o que é verdade agora".
-
-**Cancelar** — em dois tempos: primeiro pergunta quanto a companhia devolve, depois cancela com esse
-valor. Não dá para pular a primeira parte, porque a companhia exige o valor do reembolso no pedido
-de cancelamento.
+Repare numa diferença que parece filosófica e não é: essa consulta **não lê o que a gente guardou**,
+ela pergunta de novo. É a diferença entre "o que eu anotei" e "o que é verdade agora" — e é por isso
+que o bilhete é montado a partir dela.
 
 ---
 
@@ -206,10 +231,11 @@ Tudo abaixo foi testado contra o sandbox real da LATAM.
 | Confirmar preço | ✅ funciona |
 | Reservar | ✅ funciona — devolve o localizador |
 | Consultar reserva | ✅ funciona — traz passageiro, voo e valor |
-| Cancelar | ✅ chega na companhia (reserva não paga não precisa: expira sozinha) |
+| Cancelar | ✅ funciona na passagem paga — anulação confirmada e valor devolvido |
 | Ver assentos e bagagens | ✅ funciona — 279 assentos com preço, 5 tipos de bagagem |
 | **Pagar** | ✅ **funciona** — a reserva passa a paga |
 | **Parcelar** | ✅ **funciona** — até 8x sem juros |
+| **Ver/imprimir o bilhete** | ✅ funciona |
 | **Comprar assento/bagagem** | ⚠️ o pedido está correto, o **sandbox recusa a cobrança** |
 
 Sobre o último item, vale ser preciso, porque "não funciona" seria injusto e vago:
@@ -229,7 +255,9 @@ registro do sistema, para quem vai investigar.
 ## Como explicar isso em 30 segundos
 
 > "É um tradutor entre quem vende passagem e quem compra. Por fora, uma língua só; por dentro, ele
-> fala o dialeto de cada companhia. O fluxo é buscar, confirmar o preço, reservar, pagar e comprar
-> extras — e reservar e pagar são separados porque são separados na companhia: a reserva nasce com
-> prazo e sem pagamento. O valor da cobrança é sempre perguntado à companhia, nunca aceito de quem
-> chama, e nada que mexe em dinheiro é tentado duas vezes."
+> fala o dialeto de cada companhia. São cinco passos — buscar, confirmar o preço, reservar,
+> passageiro e pagar — e reservar e pagar são separados porque são separados na companhia: a reserva
+> nasce com prazo e sem pagamento. Depois de paga, a mesma tela deixa ver o bilhete, comprar assento
+> e bagagem, e cancelar — cancelar só existe aí, porque antes de pagar não há o que cancelar. O valor
+> da cobrança é sempre perguntado à companhia, nunca aceito de quem chama, e nada que mexe em
+> dinheiro é tentado duas vezes."

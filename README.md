@@ -201,10 +201,18 @@ chrome. Junto dele ficam os outros três componentes das páginas de operação 
 `FieldTable` (a tabela `Field Name / Type / Accepted Values / Required`), `Callout` (`### Advice` com
 o triângulo de `assets/warning-sign`, e `**Note:**`) e `Endpoint` (a faixa `### URL Endpoint`).
 
-O fluxo tem **seis passos** — buscar, escolher, revisar, passageiro, **pagar** e **extras**. Pagar é
-passo próprio porque é operação própria: a reserva nasce com prazo e sem pagamento. E os extras vêm
-DEPOIS de pagar, não antes, porque é só sobre a ordem emitida que a companhia vende assento e
-bagagem — a tela segue a regra da companhia em vez de oferecer o que não pode cumprir.
+O fluxo tem **cinco passos** — buscar, escolher, revisar, passageiro e **pagar**. Pagar é passo
+próprio porque é operação própria: a reserva nasce com prazo e sem pagamento.
+
+🔴 **Assento, bagagem, bilhete e cancelamento NÃO são passos.** Não têm ordem nem "próximo": são o
+que se faz com a passagem já comprada. Ficam na própria tela de pagamento, depois da confirmação —
+e o cancelamento fica **só** ali, porque antes de pagar a companhia recusa o pedido com "estado
+inválido". Um botão que sempre falha é pior que botão nenhum.
+
+O bilhete é montado a partir do `/retrieve`, não do estado da tela: comprovante que repete a própria
+anotação mostra o que a gente acha, não o que a companhia registrou. Imprimir usa o diálogo do
+navegador (de onde sai o PDF) e um `@media print` que deixa só o bloco do bilhete — gerar arquivo
+seria um segundo lugar para manter, e o desatualizado apareceria na primeira mudança.
 
 **Uma decisão de exibição vale nota:** a LATAM devolve uma oferta por família tarifária, então o
 mesmo voo chega repetido — a busca GRU→SCL traz 422 tarifas para 94 voos. Listar cru viraria cinco
@@ -226,13 +234,14 @@ Travelfusion, e o `/cancel-booking` respondia 501 mesmo com a LATAM, que cancela
 | `/quote` | ✅ OfferPrice | ✅ ProcessDetails |
 | `/booking` | ✅ OrderCreate | ✅ ProcessTerms + StartBooking |
 | `/retrieve` | ✅ OrderRetrieve | ✅ CheckBooking |
-| `/cancel-booking` | ✅ OrderReshop + OrderCancel | 501 — `StartBooking` já cobra, cancelar seria estorno |
+| `/cancel-booking` | ✅ OrderReshop + OrderCancel/**Void** | 501 — `StartBooking` já cobra, cancelar seria estorno |
 | `/seat-map` | ✅ SeatAvailability, **pela oferta** | 501 — depende do fornecedor por trás do agregador |
 | `/ancillaries` | ✅ ServiceList, **pela oferta** | 501 — saem no `/quote`, em `requiredParameters` |
 | `/fare-rules` | 501 — devolve penalidade estruturada, não o texto da tarifa | ✅ vem no ProcessDetails |
 | `/ping` | ✅ o próprio OAuth2 prova a credencial | ✅ Login |
 | `/financing-options` | ✅ InstallmentOptions | 501 — não expõe parcelamento |
 | `/issue` | ✅ OrderChange com pagamento | 501 — `StartBooking` já cobra |
+| `/order-seat-map`, `/order-ancillaries` | ✅ os mesmos catálogos, **pela reserva** | 501 |
 | `/sell-ancillaries`, `/mark-seats` | ✅ OrderChange 24.1 (ver abaixo) | 501 — o extra entra como CSP no `/booking` |
 | e-ticket, `payment-options` | 501 | 501 |
 
@@ -242,8 +251,9 @@ Travelfusion, e o `/cancel-booking` respondia 501 mesmo com a LATAM, que cancela
 | LATAM | **funcionando ponta a ponta** contra o sandbox |
 
 O fluxo completo foi percorrido contra o sandbox real da LATAM: busca GRU→SCL (424 tarifas),
-tarifação, reserva (`OPENED`), **pagamento** (a ordem passa a `CLOSED`) e recuperação da ordem com
-passageiro, documento, nascimento e itinerário de volta.
+tarifação, reserva (`OPENED`), **pagamento** (a ordem passa a `CLOSED`), recuperação da ordem com
+passageiro, documento, nascimento e itinerário de volta, e **cancelamento** (`VOID completed
+successfully`, cupom `V`, R$ 1.023,18 declarados como devolvidos).
 
 ### Pagar, parcelar e comprar extras
 
@@ -267,6 +277,28 @@ da cobrança ser decidido fora da companhia — e o erro só apareceria no extra
 🔴 **Dado de cartão não é logado, não é guardado e não volta na resposta.** O PAN existe em duas
 chamadas porque a operadora precisa dele (parcelas e cobrança), e morre com a requisição. O que fica
 no log é o `correlationId` e o localizador.
+
+#### Cancelar são DUAS operações, e a companhia diz qual
+
+O `OrderReshop` é quem decide, e a resposta muda de forma conforme o caso:
+
+| A companhia responde | Significa | O que mandamos |
+|---|---|---|
+| `Desc/DescText: VOID permitted` | dentro da janela de arrependimento | `OrderCancel` **só com o OrderID** |
+| `PriceDifferential` com `DifferentialTypeCode: Refund` | fora dela | `OrderCancel` com o `ExpectedRefundAmount` calculado |
+
+Duas armadilhas moravam aí:
+
+**O valor do reembolso não está onde a amostra sugere.** Numa ordem paga ele vem em
+`PriceDifferential/GrandTotalAmount` — irmão do `DiffPrice`, que só traz o detalhamento
+(tarifa, taxa de embarque, opcionais). Procurando só dentro do `DiffPrice`, o cancelamento parava
+com "sem valor de reembolso" numa resposta que trazia o valor.
+
+**O void não devolve `StatusCode` nenhum.** Ele confirma em texto, num `MarketingMessage`:
+`VOID completed successfully`. Sem ler isso, um cancelamento que deu certo era publicado como
+`pending` — o contrário do que aconteceu. E o valor devolvido só aparece aí, no
+`TicketDocInfo/PaymentInfo` com `PaymentStatusCode: REFUNDED`; é ele que o contrato publica em
+`refund`, junto do cupom marcado `V`.
 
 #### Dois catálogos de assento, e a diferença importa
 
