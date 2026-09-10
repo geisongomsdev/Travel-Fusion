@@ -220,7 +220,16 @@ export default function App() {
         booking: { locator },
         options: { provider: booking?.provider },
       });
-      setCancellation(response.data ?? response);
+      /**
+       * 🔴 O envelope do /cancel-booking tem um nível A MAIS que o das outras
+       * rotas: `data.data` é onde vivem `cancelled` e `refund`. Lendo só
+       * `data`, a tela recebia `cancelled: undefined` e continuava mostrando a
+       * passagem como ativa — a companhia tinha cancelado e a tela não sabia.
+       */
+      setCancellation(response.data?.data ?? response.data ?? response);
+
+      // Confirma na companhia, em vez de confiar na resposta da mutação.
+      handleRetrieve(locator);
     } catch (cancelError) {
       setError(Object.assign(cancelError, { operation: 'cancelBooking' }));
     } finally {

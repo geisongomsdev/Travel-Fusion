@@ -27,6 +27,50 @@ import { normalizeServiceList } from './normalizers/service.normalizer';
 const CONFIRMED_STATUSES = new Set(['CLOSED', 'CONFIRMED', 'TICKETED']);
 const FAILED_STATUSES = new Set(['FAILED', 'REJECTED', 'CANCELLED']);
 
+/**
+ * Os números de bilhete, venham de onde vierem.
+ *
+ * 🔴 A LATAM devolve `TicketDocInfo` em DOIS lugares e com DOIS nomes de campo:
+ * solto na resposta (`Ticket/TicketNumber`, é o caso do pagamento e da leitura
+ * da ordem) ou dentro de `DataLists/TicketDocInfoList` (`TicketDocNbr`). Ler só
+ * o segundo, que é o que a amostra mostra, fazia o `/issue` devolver `[]` numa
+ * emissão que tinha bilhete.
+ */
+function readTickets(payload: XmlValue): string[] {
+  const nodes = [
+    ...asList(child(payload, 'DataLists', 'TicketDocInfoList', 'TicketDocInfo')),
+    ...asList(child(payload, 'TicketDocInfo')),
+  ];
+
+  const numbers = nodes.flatMap((node) => [
+    text(child(node, 'TicketDocNbr')),
+    text(child(node, 'Ticket', 'TicketNumber')),
+  ]);
+
+  return [...new Set(numbers.filter((number): number is string => Boolean(number)))];
+}
+
+/**
+ * 🔴 O cancelamento NÃO aparece no status da ordem: um bilhete anulado continua
+ * com `Order/StatusCode: CLOSED`. Quem conta a verdade é o CUPOM — `VOID` ou
+ * `REFUND`. Sem olhar aqui, o `/retrieve` publicava como confirmada uma
+ * passagem que a companhia já tinha anulado.
+ */
+const VOIDED_COUPONS = new Set(['VOID', 'V', 'REFUND', 'REFUNDED']);
+
+function isVoided(payload: XmlValue): boolean {
+  const nodes = [
+    ...asList(child(payload, 'DataLists', 'TicketDocInfoList', 'TicketDocInfo')),
+    ...asList(child(payload, 'TicketDocInfo')),
+  ];
+
+  const coupons = nodes.flatMap((node) => asList(child(node, 'Ticket', 'Coupon')));
+  if (coupons.length === 0) return false;
+
+  // TODOS os cupons: um trecho anulado num bilhete de dois não cancela a viagem.
+  return coupons.every((coupon) => VOIDED_COUPONS.has((text(child(coupon, 'CouponStatusCode')) ?? '').toUpperCase()));
+}
+
 /** `<Amount CurCode="BRL">123</Amount>` → número + moeda. */
 const amount = (node: XmlValue): { value: number | null; currency: string | null } => ({
   value: num(node),
@@ -237,7 +281,23 @@ export class LatamProvider implements FlightProvider {
    * O reshop é read-only: se ele falhar, nada foi cancelado.
    */
   async cancelBooking(locator: string, context: RequestContext): Promise<ProviderCancellation> {
-    const { payload: quote } = await this.commands.orderReshop(locator, context);
+    /**
+     * 🔴 `400107002 Invalid order current status` quer dizer DUAS coisas
+     * opostas: "ainda não foi paga" e "já foi cancelada". A companhia usa o
+     * mesmo código para as duas, e a diferença muda tudo para quem está na
+     * tela — uma pede paciência, a outra diz que não há nada a fazer.
+     *
+     * Como o erro não distingue, PERGUNTAMOS. É uma chamada a mais só no
+     * caminho de falha, e é o que evita o contrato afirmar o oposto do que
+     * aconteceu.
+     */
+    const { payload: quote } = await this.commands.orderReshop(locator, context)
+      .catch(async (error: unknown) => {
+        if (await this.alreadyCancelled(locator, context)) {
+          throw new AppError('BOOKING_ALREADY_CANCELLED', { metadata: { operation: 'cancelBooking' } });
+        }
+        throw error;
+      });
 
     const refund = this.readRefund(quote);
 
@@ -462,6 +522,17 @@ export class LatamProvider implements FlightProvider {
     };
   }
 
+  /** O bilhete já está anulado? Só o cupom responde — ver `isVoided`. */
+  private async alreadyCancelled(locator: string, context: RequestContext): Promise<boolean> {
+    try {
+      const { payload } = await this.commands.orderRetrieve(locator, context);
+      return isVoided(payload);
+    } catch {
+      // Não deu para perguntar: seguimos com o erro original, que é o que sabemos.
+      return false;
+    }
+  }
+
   /**
    * Os catálogos por ordem exigem a lista de passageiros, e ela não vem no
    * corpo do pedido — está na própria reserva. Perguntar é mais barato que
@@ -534,9 +605,7 @@ export class LatamProvider implements FlightProvider {
       status: CONFIRMED_STATUSES.has(status) ? 'issued' : 'pending',
       rawStatus: status || null,
       // Os bilhetes aparecem na ordem depois da emissão; antes disso, `[]`.
-      tickets: asList(child(payload, 'DataLists', 'TicketDocInfoList', 'TicketDocInfo'))
-        .map((ticket) => text(child(ticket, 'TicketDocNbr')))
-        .filter((number): number is string => Boolean(number)),
+      tickets: readTickets(payload),
     };
   }
 
@@ -549,13 +618,23 @@ export class LatamProvider implements FlightProvider {
       throw new AppError('RESOURCE_NOT_FOUND', { metadata: { operation: 'retrieve' } });
     }
 
+    /**
+     * 🔴 O cupom tem PRECEDÊNCIA sobre o status da ordem. A LATAM mantém
+     * `CLOSED` num bilhete anulado — do ponto de vista dela a ordem existe e
+     * está fechada —, mas quem comprou não vai voar. Publicar `confirmed` aí
+     * seria dizer que a viagem está de pé.
+     */
+    const voided = isVoided(payload);
+
     return {
-      status: CONFIRMED_STATUSES.has(status)
-        ? 'confirmed'
-        : FAILED_STATUSES.has(status)
-          ? 'cancelled'
-          : 'pending',
-      rawStatus: status,
+      status: voided
+        ? 'cancelled'
+        : CONFIRMED_STATUSES.has(status)
+          ? 'confirmed'
+          : FAILED_STATUSES.has(status)
+            ? 'cancelled'
+            : 'pending',
+      rawStatus: voided ? `${status} (cupom anulado)` : status,
       locator,
       supplierConfirmation: text(child(order, 'BookingRef', 'ID')) ?? text(child(order, 'BookingRefID')),
       // A LATAM é a própria companhia: não há um fornecedor atrás dela.
