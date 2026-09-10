@@ -253,7 +253,7 @@ que fecha a passagem. Por isso `/booking` e `/issue` são rotas distintas, e nã
 
 | Rota | Mensagem | Estado |
 |---|---|---|
-| `/financing-options` | `InstallmentOptions` (v192) | ✅ 1x a 4x sem juros, verificado |
+| `/financing-options` | `InstallmentOptions` (v192) | ✅ até 8x sem juros, verificado |
 | `/issue` | `OrderChange` com pagamento (v192) | ✅ ordem vai de `OPENED` a `CLOSED`, verificado |
 | `/order-seat-map` | `SeatAvailability` **pela ordem** | ✅ 279 assentos com `SEAT_…`, verificado |
 | `/order-ancillaries` | `ServiceList` **pela ordem** | ✅ 5 bagagens com `BAG_…`, verificado |
