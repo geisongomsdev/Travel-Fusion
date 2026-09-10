@@ -240,7 +240,21 @@ export class LatamProvider implements FlightProvider {
     const { payload: quote } = await this.commands.orderReshop(locator, context);
 
     const refund = this.readRefund(quote);
-    if (refund === null) {
+
+    /**
+     * 🔴 Existem DOIS cancelamentos, e a companhia é quem diz qual vale.
+     *
+     * Dentro da janela de arrependimento ela responde `Desc/DescText: VOID
+     * permitted` e NÃO calcula reembolso — o bilhete é anulado, não devolvido.
+     * Fora dela, calcula o valor e o cancelamento é reembolso.
+     *
+     * Tratar o primeiro caso como "sem valor de reembolso" fazia o
+     * cancelamento parar justamente quando ele é mais simples.
+     */
+    const voidable = asList(child(quote, 'ReshopResults', 'ReshopOffers', 'Offer'))
+      .some((offer) => (text(child(offer, 'Desc', 'DescText')) ?? '').toUpperCase().includes('VOID'));
+
+    if (refund === null && !voidable) {
       /**
        * Sem valor não dá para seguir: o OrderCancel não aceita a mensagem sem
        * `ExpectedRefundAmount`, e chutar zero cancelaria abrindo mão do
@@ -259,7 +273,7 @@ export class LatamProvider implements FlightProvider {
       });
     }
 
-    const { payload } = await this.commands.orderCancel(locator, refund.total, context);
+    const { payload } = await this.commands.orderCancel(locator, refund?.total ?? null, context);
 
     const status = (text(child(payload, 'Order', 'StatusCode'))
       ?? text(child(payload, 'Order', 'OrderStatusCode'))
@@ -270,6 +284,11 @@ export class LatamProvider implements FlightProvider {
       // Só os status finais de falha significam cancelado de verdade.
       status: FAILED_STATUSES.has(status) ? 'cancelled' : 'pending',
       rawStatus: status || null,
+      /**
+       * `null` no void é DELIBERADO: a companhia anulou o bilhete sem declarar
+       * valor, e publicar o total pago como se fosse reembolso confirmado seria
+       * afirmar o que ela não afirmou.
+       */
       refund,
     };
   }
@@ -283,12 +302,24 @@ export class LatamProvider implements FlightProvider {
         const differential = child(item, 'PriceDifferential');
         if ((text(child(differential, 'DifferentialTypeCode')) ?? '').toLowerCase() !== 'refund') continue;
 
-        // A amostra aninha em `DiffPrice/Price`; há resposta com o total um
-        // nível acima, então os dois caminhos são tentados.
+        /**
+         * O valor do reembolso aparece em TRÊS lugares diferentes conforme a
+         * resposta, e é por isso que os três são tentados em ordem.
+         *
+         * 🔴 O que o sandbox devolve de verdade numa ordem PAGA é o terceiro:
+         * `PriceDifferential/GrandTotalAmount`, irmão do `DiffPrice` — que ali
+         * só traz o `Surcharge/Breakdown` (tarifa, taxa de embarque,
+         * opcionais). Procurar só dentro do `DiffPrice`, como a amostra sugere,
+         * fazia o cancelamento parar com "sem valor de reembolso" numa resposta
+         * que trazia o valor.
+         */
         const nested = amount(child(differential, 'DiffPrice', 'Price', 'TotalAmount'));
-        const money = nested.value !== null
+        const flat = nested.value !== null
           ? nested
           : amount(child(differential, 'DiffPrice', 'TotalAmount'));
+        const money = flat.value !== null
+          ? flat
+          : amount(child(differential, 'GrandTotalAmount'));
 
         // `roundMoney` devolve `null` para valor não-finito; aqui já sabemos que
         // é número, então o fallback é o próprio valor, nunca um zero inventado.

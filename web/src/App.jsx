@@ -9,6 +9,7 @@ import { QuoteStep } from '@/steps/QuoteStep';
 import { BookingStep } from '@/steps/BookingStep';
 import { PaymentStep } from '@/steps/PaymentStep';
 import { ExtrasStep } from '@/steps/ExtrasStep';
+import { VoucherDialog } from '@/components/VoucherDialog';
 import { post, streamAvailability } from '@/lib/api';
 
 /**
@@ -21,7 +22,6 @@ const STEPS = [
   { key: 'quote', label: 'Revisar' },
   { key: 'booking', label: 'Passageiro' },
   { key: 'payment', label: 'Pagar' },
-  { key: 'extras', label: 'Extras' },
 ];
 
 export default function App() {
@@ -51,6 +51,8 @@ export default function App() {
   const [orderAncillaries, setOrderAncillaries] = useState(null);
   const [loadingExtras, setLoadingExtras] = useState(false);
   const [purchase, setPurchase] = useState(null);
+  const [showExtras, setShowExtras] = useState(false);
+  const [voucherOpen, setVoucherOpen] = useState(false);
 
   const reset = () => {
     setStep(0);
@@ -71,6 +73,8 @@ export default function App() {
     setOrderSeatMap(null);
     setOrderAncillaries(null);
     setPurchase(null);
+    setShowExtras(false);
+    setVoucherOpen(false);
     setError(null);
   };
 
@@ -268,6 +272,13 @@ export default function App() {
         ...(installmentId ? { installmentId } : {}),
       });
       setIssued(response.data);
+      /**
+       * 🔴 Relê a reserva NA COMPANHIA logo depois de pagar. O bilhete é
+       * montado a partir desta leitura, não do que a tela guardou — comprovante
+       * que repete a própria anotação mostra o que a gente acha, não o que a
+       * companhia registrou.
+       */
+      handleRetrieve(booking.locator);
     } catch (payError) {
       setError(Object.assign(payError, { operation: 'issue' }));
     } finally {
@@ -373,7 +384,6 @@ export default function App() {
             retrieved={retrieved}
             cancellation={cancellation}
             onRetrieve={handleRetrieve}
-            onCancel={handleCancel}
             onPay={() => setStep(4)}
           />
         )}
@@ -388,22 +398,39 @@ export default function App() {
             onLoadInstallments={handleInstallments}
             issued={issued}
             onPay={handlePay}
-            onDone={() => setStep(5)}
-          />
+            cancelled={Boolean(cancellation?.cancelled) || retrieved?.status === 'cancelled'}
+            onVoucher={() => setVoucherOpen(true)}
+            onCancel={() => handleCancel(booking.locator)}
+            onShowExtras={() => {
+              setShowExtras(true);
+              // Só busca o catálogo quando alguém pede: são duas chamadas à companhia.
+              if (!orderSeatMap) handleLoadExtras();
+            }}
+          >
+            {showExtras && (
+              <ExtrasStep
+                locator={booking?.locator}
+                currency={retrieved?.currency ?? quote?.price?.currency}
+                seatMap={orderSeatMap}
+                ancillaries={orderAncillaries}
+                loading={loadingExtras}
+                running={running}
+                purchase={purchase}
+                onLoad={handleLoadExtras}
+                onBuy={handleBuyExtras}
+              />
+            )}
+          </PaymentStep>
         )}
-        {step === 5 && (
-          <ExtrasStep
-            locator={booking?.locator}
-            currency={retrieved?.currency ?? quote?.price?.currency}
-            seatMap={orderSeatMap}
-            ancillaries={orderAncillaries}
-            loading={loadingExtras}
-            running={running}
-            purchase={purchase}
-            onLoad={handleLoadExtras}
-            onBuy={handleBuyExtras}
-          />
-        )}
+
+        <VoucherDialog
+          open={voucherOpen}
+          onOpenChange={setVoucherOpen}
+          locator={booking?.locator}
+          retrieved={retrieved}
+          paid={issued?.amount?.total}
+          services={purchase?.services}
+        />
 
         {step > 0 && (
           <Button variant="outline" size="sm" onClick={() => setStep((s) => Math.max(0, s - 1))}>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle2, CreditCard, Loader2, Lock } from 'lucide-react';
+import { Armchair, CheckCircle2, CreditCard, FileText, Loader2, Lock, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -26,7 +26,11 @@ export function PaymentStep({
   onLoadInstallments,
   issued,
   onPay,
-  onDone,
+  onShowExtras,
+  onVoucher,
+  onCancel,
+  cancelled,
+  children,
 }) {
   const [card, setCard] = useState({
     brand: 'VI',
@@ -59,7 +63,20 @@ export function PaymentStep({
   const updatePayer = update(setPayer);
   const updateBilling = update(setBilling);
 
-  if (issued) return <PaymentResult issued={issued} onDone={onDone} />;
+  if (issued) {
+    return (
+      <PaymentResult
+        issued={issued}
+        running={running}
+        cancelled={cancelled}
+        onShowExtras={onShowExtras}
+        onVoucher={onVoucher}
+        onCancel={onCancel}
+      >
+        {children}
+      </PaymentResult>
+    );
+  }
 
   const submit = (event) => {
     event.preventDefault();
@@ -238,50 +255,90 @@ function Installments({ options, loading, chosen, amount, currency, onLoad, onCh
   );
 }
 
-/** 🔴 `pending` NÃO é emitido: o bilhete só existe no status final. */
-function PaymentResult({ issued, onDone }) {
+/**
+ * Passagem paga.
+ *
+ * 🔴 `pending` NÃO é emitido: o bilhete só existe no status final, e enquanto a
+ * companhia não fecha a cobrança a tela não promete passagem.
+ *
+ * 🔴 É AQUI que aparece cancelar, e não na tela da reserva. Antes de pagar não
+ * há o que cancelar: a reserva não paga expira sozinha no prazo, e a companhia
+ * recusa o cancelamento com "estado inválido". Oferecer um botão que sempre
+ * falha é pior do que não oferecer.
+ */
+function PaymentResult({ issued, running, cancelled, onShowExtras, onVoucher, onCancel, children }) {
   const done = issued.issued;
 
   return (
-    <div className="mx-auto max-w-2xl">
+    <div className="mx-auto max-w-2xl space-y-5">
       <Card>
         <CardContent className="space-y-5 pt-2">
           <div className="flex items-start gap-3">
-            <CheckCircle2
-              className={cn('mt-0.5 size-5 shrink-0', done ? 'text-emerald-600' : 'text-amber-500')}
-              strokeWidth={1.5}
-            />
+            {cancelled ? (
+              <XCircle className="mt-0.5 size-5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+            ) : (
+              <CheckCircle2
+                className={cn('mt-0.5 size-5 shrink-0', done ? 'text-emerald-600' : 'text-amber-500')}
+                strokeWidth={1.5}
+              />
+            )}
             <div>
-              <p className="font-medium">{done ? 'Pagamento aprovado' : 'Pagamento em processamento'}</p>
+              <p className="font-medium">
+                {cancelled
+                  ? 'Passagem cancelada'
+                  : done
+                    ? 'Pagamento aprovado · passagem emitida'
+                    : 'Pagamento em processamento'}
+              </p>
               <p className="text-sm text-muted-foreground">
-                {done
-                  ? 'A passagem está paga. Agora dá para escolher assento e bagagem.'
-                  : 'A companhia ainda está fechando a cobrança. Atualize a reserva em instantes.'}
+                {cancelled
+                  ? 'A companhia confirmou o cancelamento.'
+                  : done
+                    ? 'Está tudo certo. Dá para escolher assento e bagagem mesmo com a passagem já emitida.'
+                    : 'A companhia ainda está fechando a cobrança. Atualize em instantes.'}
               </p>
             </div>
           </div>
 
-          <div className="rounded-lg border bg-muted/50 px-4 py-3">
-            <p className="text-xs text-muted-foreground">Pago</p>
-            <p className="text-2xl font-semibold tabular-nums">
-              {formatMoney(issued.amount?.total, issued.amount?.currency)}
-            </p>
+          <div className="flex flex-wrap gap-4">
+            <div className="min-w-[9rem] flex-1 rounded-lg border bg-muted/50 px-4 py-3">
+              <p className="text-xs text-muted-foreground">Pago</p>
+              <p className="text-2xl font-semibold tabular-nums">
+                {formatMoney(issued.amount?.total, issued.amount?.currency)}
+              </p>
+            </div>
+            {issued.tickets?.length > 0 && (
+              <div className="min-w-[9rem] flex-1 rounded-lg border px-4 py-3">
+                <p className="text-xs text-muted-foreground">Bilhete</p>
+                {issued.tickets.map((ticket) => (
+                  <p key={ticket} className="font-mono text-sm">{ticket}</p>
+                ))}
+              </div>
+            )}
           </div>
 
-          {issued.tickets?.length > 0 && (
-            <div className="rounded-lg border px-4 py-3">
-              <p className="text-xs text-muted-foreground">Bilhete</p>
-              {issued.tickets.map((ticket) => (
-                <p key={ticket} className="font-mono text-sm">{ticket}</p>
-              ))}
+          {!cancelled && (
+            <div className="flex flex-wrap gap-2 border-t pt-4">
+              <Button onClick={onVoucher}>
+                <FileText /> Ver bilhete
+              </Button>
+              {done && (
+                <Button variant="outline" onClick={onShowExtras}>
+                  <Armchair /> Assento e bagagem
+                </Button>
+              )}
+              <Button variant="ghost" disabled={running} onClick={onCancel}>
+                {running ? <Loader2 className="animate-spin" /> : null}
+                Cancelar passagem
+              </Button>
             </div>
           )}
-
-          <Button className="w-full sm:w-auto" onClick={onDone}>
-            Escolher assento e bagagem
-          </Button>
         </CardContent>
       </Card>
+
+      {/* Os extras entram embaixo, na mesma tela: não são outra etapa do fluxo,
+          são o que dá para fazer com a passagem já na mão. */}
+      {children}
     </div>
   );
 }
