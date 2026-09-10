@@ -34,6 +34,30 @@ export function QuoteStep({
   const selectable = requiredParameters.filter((parameter) => parameter.options?.length > 0);
   const leg = selection?.leg;
 
+  /**
+   * 🔴 O total é SOMADO aqui, não lido do `/quote`.
+   *
+   * O `price.total` que a companhia devolve é o da TARIFA — assento e bagagem
+   * são ofertas à-la-carte, com preço próprio, e não entram nele. Mostrar o
+   * preço de cada extra na tela e deixar o total parado é a tela mentindo: o
+   * número que a pessoa lê tem que ser o que ela vai pagar.
+   *
+   * A moeda vem do preço da tarifa e não é misturada — se um extra vier em
+   * outra moeda, somar seria pior do que não somar, e por isso ele fica de
+   * fora da conta em vez de virar um número errado.
+   */
+  const currency = price?.currency ?? null;
+  const sameCurrency = (money) => money && (money.currency === null || money.currency === currency);
+
+  const extrasTotal = [
+    ...(seat?.price ? [seat.price] : []),
+    ...extras.map((item) => item.price),
+  ]
+    .filter(sameCurrency)
+    .reduce((sum, money) => sum + (money.total ?? 0), 0);
+
+  const total = (price?.total ?? 0) + extrasTotal;
+
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
       <div className="space-y-5">
@@ -169,8 +193,22 @@ export function QuoteStep({
           <Row label="Tarifa" value={formatMoney(price?.base, price?.currency)} />
           <Row label="Taxas e impostos" value={formatMoney(price?.taxes?.boarding, price?.currency)} />
           {price?.fees > 0 && <Row label="Taxa de serviço" value={formatMoney(price.fees, price.currency)} />}
+
+          {/* Cada opcional escolhido vira uma LINHA, não um número embutido:
+              quem está comprando precisa ver de onde veio o acréscimo. */}
+          {seat?.price && (
+            <Row label={`Assento ${seat.seat}`} value={formatMoney(seat.price.total, seat.price.currency)} />
+          )}
+          {extras.map((item) => (
+            <Row
+              key={item.offerItemId}
+              label={labelForAncillary(item)}
+              value={item.price ? formatMoney(item.price.total, item.price.currency) : '—'}
+            />
+          ))}
+
           <div className="border-t pt-3">
-            <Row label="Total" value={formatMoney(price?.total, price?.currency)} strong />
+            <Row label="Total" value={formatMoney(total, currency)} strong />
           </div>
           <Button size="lg" className="w-full" onClick={onContinue}>
             Continuar

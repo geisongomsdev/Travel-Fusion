@@ -77,7 +77,7 @@ export default function App() {
         if (event.type === 'complete') setStep(1);
       });
     } catch (streamError) {
-      setError(streamError);
+      setError(Object.assign(streamError, { operation: 'availability' }));
     } finally {
       setRunning(false);
     }
@@ -100,7 +100,7 @@ export default function App() {
         .then((extra) => setAncillaries(extra.data?.ancillaries ?? []))
         .catch(() => setAncillaries([]));
     } catch (quoteError) {
-      setError(quoteError);
+      setError(Object.assign(quoteError, { operation: 'quote' }));
     } finally {
       setRunning(false);
     }
@@ -135,7 +135,7 @@ export default function App() {
       });
       setBooking(response.data);
     } catch (bookingError) {
-      setError(bookingError);
+      setError(Object.assign(bookingError, { operation: 'createBooking' }));
     } finally {
       setRunning(false);
     }
@@ -153,7 +153,7 @@ export default function App() {
       const response = await post('/seat-map', { identifier: selection.leg.identifier });
       setSeatMap(response.data);
     } catch (seatError) {
-      setError(seatError);
+      setError(Object.assign(seatError, { operation: 'seatMap' }));
     } finally {
       setLoadingSeats(false);
     }
@@ -177,7 +177,7 @@ export default function App() {
       });
       setRetrieved(response.data ?? response);
     } catch (retrieveError) {
-      setError(retrieveError);
+      setError(Object.assign(retrieveError, { operation: 'retrieve' }));
     } finally {
       setRunning(false);
     }
@@ -197,7 +197,7 @@ export default function App() {
       });
       setCancellation(response.data ?? response);
     } catch (cancelError) {
-      setError(cancelError);
+      setError(Object.assign(cancelError, { operation: 'cancelBooking' }));
     } finally {
       setRunning(false);
     }
