@@ -1,48 +1,104 @@
-import { Badge } from '@/components/ui/badge';
-import { Callout } from '@/components/sandbox/Callout';
-import { CodeBlock } from '@/components/sandbox/CodeBlock';
+import { AlertTriangle } from 'lucide-react';
 
 /**
- * O contrato de erro renderizado como ele é. O `code` é o que a tela ramifica —
- * a `message` vem em inglês do catálogo e não é traduzida.
+ * Erro para quem está comprando.
  *
- * O erro do PROVEDOR aparece no bloco escuro: é lá que mora o
- * `cvc-complex-type` que diz qual campo do XSD faltou, e esconder isso atrás de
- * um resumo é justamente o que faz perder uma tarde de depuração.
+ * 🔴 O código canônico, o status HTTP e o payload do provedor NÃO aparecem
+ * aqui. Eles continuam existindo — na resposta da API, no log e no
+ * `correlationId` — mas na tela viram uma frase que diz o que aconteceu e o
+ * que fazer. `RESOURCE_CONFLICT / 400107002 / OrderReshop` não ajuda ninguém
+ * que só quer cancelar uma passagem.
+ *
+ * O mapa é por CÓDIGO + OPERAÇÃO porque o mesmo código significa coisas
+ * diferentes em rotas diferentes: um conflito no cancelamento é "ainda não dá
+ * para cancelar"; num quote seria "a oferta expirou".
  */
+const MESSAGES = {
+  'RESOURCE_CONFLICT:cancelBooking': {
+    title: 'Esta reserva ainda não pode ser cancelada',
+    body: 'Ela ainda não foi paga. Reservas não pagas não precisam de cancelamento — expiram sozinhas no prazo da companhia.',
+  },
+  'RESOURCE_CONFLICT:quote': {
+    title: 'Esta oferta não está mais disponível',
+    body: 'O preço ou o assento mudaram desde a busca. Faça a busca de novo para ver as opções atuais.',
+  },
+  'FARE_PRICE_CHANGED:quote': {
+    title: 'O preço mudou',
+    body: 'A companhia atualizou o valor desta tarifa. Busque de novo para ver o preço atual.',
+  },
+  'FARE_UNAVAILABLE:quote': {
+    title: 'Esta tarifa acabou',
+    body: 'Alguém comprou os últimos lugares nesta tarifa. Escolha outra opção.',
+  },
+  'RESOURCE_NOT_FOUND:retrieve': {
+    title: 'Reserva não encontrada',
+    body: 'Confira o localizador. Se acabou de reservar, aguarde um instante e tente de novo.',
+  },
+  CAPABILITY_NOT_SUPPORTED: {
+    title: 'Operação indisponível para esta companhia',
+    body: 'Esta companhia não oferece essa ação pelo nosso canal.',
+  },
+  SEARCH_VALIDATION_ERROR: {
+    title: 'Faltou alguma informação',
+    body: 'Confira os campos e tente de novo.',
+  },
+  PROVIDER_AUTHENTICATION_FAILED: {
+    title: 'Não foi possível falar com a companhia',
+    body: 'A conexão com o sistema da companhia está indisponível. Tente novamente em alguns minutos.',
+  },
+  PROVIDER_TIMEOUT: {
+    title: 'A companhia demorou a responder',
+    body: 'Tente novamente. Se você estava reservando, consulte o estado antes de repetir.',
+  },
+  NO_FLIGHTS: {
+    title: 'Nenhum voo para esta rota',
+    body: 'Tente outra data ou outro aeroporto.',
+  },
+};
+
+const FALLBACK = {
+  title: 'Algo deu errado',
+  body: 'Tente novamente em alguns instantes.',
+};
+
+function resolve(error) {
+  /**
+   * 🔴 A ação vem de QUEM CHAMOU, não do servidor. O corpo do erro traz o nome
+   * da mensagem do provedor (`OrderReshop`), que é verdade da integração e não
+   * diz qual botão a pessoa apertou — e é o botão que define a frase certa.
+   */
+  const operation = error.operation ?? error.metadata?.operation ?? null;
+  return (
+    MESSAGES[`${error.code}:${operation}`]
+    ?? MESSAGES[error.code]
+    ?? FALLBACK
+  );
+}
+
 export function ErrorPanel({ error }) {
   if (!error) return null;
 
+  const { title, body } = resolve(error);
+
   return (
-    <Callout tone="error" title={null}>
-      <div className="space-y-2.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="destructive">{error.code}</Badge>
-          {error.status && <Badge variant="outline">HTTP {error.status}</Badge>}
-          {error.providerError?.provider && <Badge variant="outline">{error.providerError.provider}</Badge>}
+    <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 px-4 py-3">
+      <div className="flex gap-3">
+        <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-500" strokeWidth={1.5} />
+        <div className="min-w-0 space-y-1">
+          <p className="text-sm font-medium">{title}</p>
+          <p className="text-sm text-muted-foreground">{body}</p>
+
+          {/* Campos que a pessoa precisa corrigir — os únicos detalhes que
+              sobrevivem, porque são acionáveis. */}
+          {error.details?.errors && (
+            <ul className="pt-1 text-sm text-muted-foreground">
+              {Object.values(error.details.errors).flat().map((message, index) => (
+                <li key={index}>· {message}</li>
+              ))}
+            </ul>
+          )}
         </div>
-
-        <p className="font-medium">{error.message}</p>
-
-        {error.details?.errors && (
-          <ul className="space-y-0.5 text-[13px] text-muted-foreground">
-            {Object.entries(error.details.errors).map(([field, messages]) => (
-              <li key={field}>
-                <code className="font-mono text-[12px] text-foreground">{field}</code>: {messages.join(', ')}
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {error.providerError && (
-          <CodeBlock
-            code={JSON.stringify(error.providerError, null, 2)}
-            language="json"
-            title={`erro do provedor · ${error.providerError.operation ?? ''}`}
-            maxHeight="16rem"
-          />
-        )}
       </div>
-    </Callout>
+    </div>
   );
 }

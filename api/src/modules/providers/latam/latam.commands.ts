@@ -23,6 +23,9 @@ export const PATHS = {
   orderCreate: process.env.LATAM_PATH_ORDER_CREATE ?? '/ndc/v192/order/create',
   orderRetrieve: process.env.LATAM_PATH_ORDER_RETRIEVE ?? '/ndc/v192/order/retrieve',
   orderCancel: process.env.LATAM_PATH_ORDER_CANCEL ?? '/ndc/v192/order/cancel',
+  orderReshop: process.env.LATAM_PATH_ORDER_RESHOP ?? '/ndc/v192/order/reshop',
+  seatAvailability: process.env.LATAM_PATH_SEATS ?? '/ndc/v192/seats/availability',
+  serviceList: process.env.LATAM_PATH_SERVICES ?? '/ndc/v192/services/list',
 };
 
 /** Envelope NDC: cada mensagem tem o SEU namespace, derivado do nome. */
@@ -210,5 +213,83 @@ export class LatamCommands {
       });
 
     return this.client.send('OrderRetrieve', PATHS.orderRetrieve, envelope('IATA_OrderRetrieveRQ', inner), context);
+  }
+
+  /**
+   * SeatAvailability = o mapa de assentos.
+   *
+   * 🔴 É endereçado pela OFERTA, não pelo localizador: na LATAM a escolha de
+   * assento acontece ANTES de reservar. O contrato canônico modela `/seat-map`
+   * sobre a reserva, e essa divergência está documentada no README — aqui o
+   * `identifier` da oferta faz o papel do localizador.
+   */
+  async seatAvailability(offerId: string, paxIds: string[], context: RequestContext): Promise<LatamResult> {
+    const pax = paxIds.length > 0 ? paxIds : ['ADT_1'];
+
+    const inner = partyAndPos(context)
+      + `<Request>${toXml('CoreRequest', { Offer: { OfferID: offerId } })}`
+      + toXml('Pax', pax.map((paxId) => ({ PaxID: paxId, PTC: paxId.split('_')[0] })))
+      + '</Request>';
+
+    return this.client.send(
+      'SeatAvailability',
+      PATHS.seatAvailability,
+      envelope('IATA_SeatAvailabilityRQ', inner),
+      context,
+    );
+  }
+
+  /**
+   * ServiceList = os opcionais vendidos à parte (bagagem extra, etc).
+   *
+   * Mesma forma do SeatAvailability, e endereçado do mesmo jeito: pela OFERTA.
+   * O fluxo publicado é AirShopping → SeatAvailability → ServiceList →
+   * OfferPrice → OrderCreate.
+   */
+  async serviceList(offerId: string, paxIds: string[], context: RequestContext): Promise<LatamResult> {
+    const pax = paxIds.length > 0 ? paxIds : ['ADT_1'];
+
+    const inner = partyAndPos(context)
+      + `<Request>${toXml('CoreRequest', { Offer: { OfferID: offerId } })}`
+      + toXml('Pax', pax.map((paxId) => ({ PaxID: paxId, PTC: paxId.split('_')[0] })))
+      + '</Request>';
+
+    return this.client.send('ServiceList', PATHS.serviceList, envelope('IATA_ServiceListRQ', inner), context);
+  }
+
+  /**
+   * OrderReshop = calcular o reembolso do cancelamento.
+   *
+   * 🔴 É o PRIMEIRO passo do cancelamento, não uma consulta opcional: o
+   * OrderCancel exige `ExpectedRefundAmount`, e o valor sai daqui. Cancelar
+   * sem passar por ele é chutar quanto a companhia vai devolver.
+   *
+   * Read-only: calcula, não cancela nada.
+   */
+  async orderReshop(orderId: string, context: RequestContext): Promise<LatamResult> {
+    const inner = partyAndPos(context)
+      + toXml('Request', {
+        OrderRefID: orderId,
+        UpdateOrder: { CancelOrder: { OrderRefID: orderId } },
+      });
+
+    return this.client.send('OrderReshop', PATHS.orderReshop, envelope('IATA_OrderReshopRQ', inner), context);
+  }
+
+  /**
+   * OrderCancel = cancelar de verdade.
+   *
+   * 🔴 Mutação não idempotente, como o OrderCreate: o client força `retries: 0`.
+   * Se a resposta se perder, o caminho é o OrderRetrieve — nunca cancelar de
+   * novo, porque a primeira pode ter valido.
+   */
+  async orderCancel(orderId: string, refundAmount: number, context: RequestContext): Promise<LatamResult> {
+    const inner = partyAndPos(context)
+      + toXml('Request', {
+        ExpectedRefundAmount: { TotalAmount: refundAmount },
+        Order: { OrderID: orderId, OwnerCode: OWNER_CODE },
+      });
+
+    return this.client.send('OrderCancel', PATHS.orderCancel, envelope('IATA_OrderCancelRQ', inner), context);
   }
 }

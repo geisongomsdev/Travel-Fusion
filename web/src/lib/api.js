@@ -18,6 +18,9 @@ export async function post(path, body) {
     error.status = response.status;
     error.details = payload?.details || null;
     error.providerError = payload?.providerError || null;
+    // A operação é o que deixa a tela dizer a frase certa: o mesmo código
+    // significa coisas diferentes em rotas diferentes.
+    error.metadata = payload?.metadata || null;
     throw error;
   }
   return payload;

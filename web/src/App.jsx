@@ -13,8 +13,8 @@ import { post, streamAvailability } from '@/lib/api';
 const STEPS = [
   { key: 'search', label: 'Buscar' },
   { key: 'results', label: 'Escolher' },
-  { key: 'quote', label: 'Tarifar' },
-  { key: 'booking', label: 'Reservar' },
+  { key: 'quote', label: 'Revisar' },
+  { key: 'booking', label: 'Passageiro' },
 ];
 
 export default function App() {
@@ -28,6 +28,13 @@ export default function App() {
   const [quote, setQuote] = useState(null);
   const [parameters, setParameters] = useState({});
   const [booking, setBooking] = useState(null);
+  const [retrieved, setRetrieved] = useState(null);
+  const [cancellation, setCancellation] = useState(null);
+  const [seatMap, setSeatMap] = useState(null);
+  const [ancillaries, setAncillaries] = useState([]);
+  const [extras, setExtras] = useState([]);
+  const [seat, setSeat] = useState(null);
+  const [loadingSeats, setLoadingSeats] = useState(false);
 
   const reset = () => {
     setStep(0);
@@ -37,6 +44,12 @@ export default function App() {
     setQuote(null);
     setParameters({});
     setBooking(null);
+    setRetrieved(null);
+    setCancellation(null);
+    setSeatMap(null);
+    setSeat(null);
+    setAncillaries([]);
+    setExtras([]);
     setError(null);
   };
 
@@ -64,7 +77,7 @@ export default function App() {
         if (event.type === 'complete') setStep(1);
       });
     } catch (streamError) {
-      setError(streamError);
+      setError(Object.assign(streamError, { operation: 'availability' }));
     } finally {
       setRunning(false);
     }
@@ -78,18 +91,31 @@ export default function App() {
       const response = await post('/quote', { identifier: leg.identifier });
       setQuote(response.data);
       setStep(2);
+
+      /**
+       * Os opcionais são leitura independente e podem falhar sem derrubar a
+       * tarifação — por isso ficam fora do try principal.
+       */
+      post('/ancillaries', { identifier: leg.identifier })
+        .then((extra) => setAncillaries(extra.data?.ancillaries ?? []))
+        .catch(() => setAncillaries([]));
     } catch (quoteError) {
-      setError(quoteError);
+      setError(Object.assign(quoteError, { operation: 'quote' }));
     } finally {
       setRunning(false);
     }
   }
 
-  async function handleBook(passengers) {
+  /**
+   * @param passengers já vêm do formulário com o seu `customParameters`
+   *   (documento), porque isso é dado do passageiro, não da reserva.
+   * @param bookingParameters e-mail e telefone — o contato da reserva.
+   */
+  async function handleBook(passengers, bookingParameters = {}) {
     setRunning(true);
     setError(null);
     try {
-      // Os CSPs por passageiro e por reserva saem daqui e entram no ProcessTerms.
+      // Os CSPs escolhidos no /quote (bagagem da Travelfusion) entram aqui.
       const perPassenger = {};
       const perBooking = {};
       for (const parameter of quote?.requiredParameters || []) {
@@ -100,12 +126,78 @@ export default function App() {
 
       const response = await post('/booking', {
         identifier: selection.leg.identifier,
-        passengers: passengers.map((passenger) => ({ ...passenger, customParameters: perPassenger })),
-        customParameters: perBooking,
+        // O que o formulário mandou vence o CSP genérico: é mais específico.
+        passengers: passengers.map((passenger) => ({
+          ...passenger,
+          customParameters: { ...perPassenger, ...passenger.customParameters },
+        })),
+        customParameters: { ...perBooking, ...bookingParameters },
       });
       setBooking(response.data);
     } catch (bookingError) {
-      setError(bookingError);
+      setError(Object.assign(bookingError, { operation: 'createBooking' }));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  /**
+   * O mapa de assentos é endereçado pela OFERTA, não pelo localizador: na
+   * LATAM a escolha acontece antes de reservar. Por isso ele vive no passo de
+   * revisão, e não depois da reserva.
+   */
+  async function handleSeatMap() {
+    setLoadingSeats(true);
+    setError(null);
+    try {
+      const response = await post('/seat-map', { identifier: selection.leg.identifier });
+      setSeatMap(response.data);
+    } catch (seatError) {
+      setError(Object.assign(seatError, { operation: 'seatMap' }));
+    } finally {
+      setLoadingSeats(false);
+    }
+  }
+
+  /**
+   * Pós-venda. As duas rotas existem no contrato e funcionavam sem ter como
+   * serem chamadas daqui — o fluxo terminava no localizador.
+   *
+   * 🔴 O `/retrieve` é a leitura INDEPENDENTE: ele não lê o que guardamos, ele
+   * pergunta à companhia. É o que prova o efeito da reserva e do cancelamento,
+   * e por isso a resposta dele substitui o estado local em vez de acumular.
+   */
+  async function handleRetrieve(locator) {
+    setRunning(true);
+    setError(null);
+    try {
+      const response = await post('/retrieve', {
+        booking: { locator },
+        options: { provider: booking?.provider },
+      });
+      setRetrieved(response.data ?? response);
+    } catch (retrieveError) {
+      setError(Object.assign(retrieveError, { operation: 'retrieve' }));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  /**
+   * 🔴 Mutação não idempotente, e sem retry. Se a resposta se perder, o caminho
+   * é o `/retrieve` — nunca cancelar de novo, porque a primeira pode ter valido.
+   */
+  async function handleCancel(locator) {
+    setRunning(true);
+    setError(null);
+    try {
+      const response = await post('/cancel-booking', {
+        booking: { locator },
+        options: { provider: booking?.provider },
+      });
+      setCancellation(response.data ?? response);
+    } catch (cancelError) {
+      setError(Object.assign(cancelError, { operation: 'cancelBooking' }));
     } finally {
       setRunning(false);
     }
@@ -125,11 +217,6 @@ export default function App() {
             <Button variant="ghost" size="sm" onClick={reset}>
               <RotateCcw className="h-4 w-4" /> Reiniciar
             </Button>
-            <Button variant="ghost" size="sm" asChild>
-              <a href="http://localhost:3010/docs" target="_blank" rel="noreferrer">
-                Swagger <ExternalLink className="h-3.5 w-3.5" />
-              </a>
-            </Button>
           </nav>
         </div>
       </header>
@@ -137,17 +224,14 @@ export default function App() {
       <main className="mx-auto w-full max-w-7xl flex-1 space-y-6 px-6 py-6">
         {/* Título de página em texto, não em faixa colorida. */}
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Fluxo de venda, ponta a ponta</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            LATAM NDC v19.2 (síncrono) e Travelfusion Direct Connect (polling) atrás do mesmo contrato.
-          </p>
+          <h1 className="text-xl font-semibold tracking-tight">Passagens aéreas</h1>
         </div>
 
         <Steps steps={STEPS} current={step} />
 
         <ErrorPanel error={error} />
 
-        {step === 0 && <SearchStep onSearch={handleSearch} running={running} events={events} />}
+        {step === 0 && <SearchStep onSearch={handleSearch} running={running} />}
         {step === 1 && <ResultsStep data={offers} onSelect={handleSelect} />}
         {step === 2 && (
           <QuoteStep
@@ -155,10 +239,32 @@ export default function App() {
             selection={selection}
             parameters={parameters}
             onChangeParameter={(name, value) => setParameters((prev) => ({ ...prev, [name]: value }))}
+            ancillaries={ancillaries}
+            extras={extras}
+            onToggleExtra={(item) => setExtras((prev) => (
+              prev.some((x) => x.offerItemId === item.offerItemId)
+                ? prev.filter((x) => x.offerItemId !== item.offerItemId)
+                : [...prev, item]
+            ))}
+            seatMap={seatMap}
+            seat={seat}
+            loadingSeats={loadingSeats}
+            onLoadSeatMap={handleSeatMap}
+            onSelectSeat={setSeat}
             onContinue={() => setStep(3)}
           />
         )}
-        {step === 3 && <BookingStep onBook={handleBook} running={running} booking={booking} />}
+        {step === 3 && (
+          <BookingStep
+            onBook={handleBook}
+            running={running}
+            booking={booking}
+            retrieved={retrieved}
+            cancellation={cancellation}
+            onRetrieve={handleRetrieve}
+            onCancel={handleCancel}
+          />
+        )}
 
         {step > 0 && (
           <Button variant="outline" size="sm" onClick={() => setStep((s) => Math.max(0, s - 1))}>
@@ -168,7 +274,7 @@ export default function App() {
       </main>
 
       <footer className="shrink-0 border-t border-border py-4 text-center text-xs text-muted-foreground">
-        Pass · integração LATAM NDC + Travelfusion
+        Pass · passagens aéreas
       </footer>
     </div>
   );

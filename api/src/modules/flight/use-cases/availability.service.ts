@@ -54,7 +54,10 @@ export class AvailabilityService {
 
     const runs = providers.map(async (provider) => {
       try {
-        const offers = await this.collect(provider, request, context);
+        const offers = this.applyOptionFilters(
+          await this.collect(provider, request, context),
+          request,
+        );
         const data = this.buildData(offers, request);
         perProvider[provider.name] = data;
 
@@ -165,9 +168,50 @@ export class AvailabilityService {
     return accumulated;
   }
 
+  /**
+   * `options.refundable` e `options.class` aplicados sobre o resultado.
+   *
+   * 🔴 Ficam AQUI, na camada do contrato, e não no provedor, porque só assim
+   * valem igual para os dois: a LATAM já filtra cabine no AirShopping
+   * (`PreferredCabinType`) e a Travelfusion não filtra nada. Antes disso, os
+   * dois campos chegavam no pedido e não faziam efeito nenhum — pior que não
+   * existir, porque quem chama acredita que filtrou.
+   *
+   * Para a LATAM o filtro de cabine é redundante e não custa nada; para a
+   * Travelfusion é o que faz a opção existir.
+   */
+  private applyOptionFilters(offers: ProviderOffer[], request: AvailabilityDto): ProviderOffer[] {
+    const wantRefundable = request.options?.refundable === true;
+    const wantCabin = request.options?.class ?? null;
+
+    if (!wantRefundable && !wantCabin) return offers;
+
+    return offers.filter((offer) => {
+      const fares = [
+        ...offer.outbound.fares,
+        ...(offer.inbound?.fares ?? []),
+      ];
+      if (fares.length === 0) return false;
+
+      /**
+       * 🔴 `refundable: null` é DESCONHECIDO, não "sim". Quem pediu só
+       * reembolsável não pode receber uma tarifa cuja regra não sabemos —
+       * devolver na dúvida é afirmar o que o provedor não afirmou.
+       */
+      if (wantRefundable && !fares.some((fare) => fare.rules?.refundable === true)) return false;
+
+      // `cabin: null` é a oferta com MAIS DE UMA cabine — cabe em qualquer pedido.
+      if (wantCabin && !fares.some((fare) => fare.cabin === null || fare.cabin === wantCabin)) {
+        return false;
+      }
+
+      return true;
+    });
+  }
+
   /** Rota internacional = algum trecho cruza país. Sem tabela de IATA→país,
    * o honesto é declarar `false` e não adivinhar. */
-  private isInternational(request: AvailabilityDto): boolean {
+  private isInternational(_request: AvailabilityDto): boolean {
     return false;
   }
 

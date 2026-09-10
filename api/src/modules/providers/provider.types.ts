@@ -113,6 +113,9 @@ export interface FlightProvider {
     fareRules: boolean;
     retrieve: boolean;
     multicity: boolean;
+    cancelBooking: boolean;
+    seatMap: boolean;
+    ancillaries: boolean;
   };
 
   probe(context: RequestContext): Promise<ProviderProbe>;
@@ -126,6 +129,67 @@ export interface FlightProvider {
   retrieve(locator: string, context: RequestContext): Promise<ProviderRetrieval>;
 
   fareRules(key: OfferKey, dto: FareRulesDto, context: RequestContext): Promise<FareRuleSection[]>;
+
+  /**
+   * Cancelar a reserva. OPCIONAL: só existe em provedor que declara
+   * `supports.cancelBooking`, e o contrato responde 501 nos demais.
+   */
+  cancelBooking?(locator: string, context: RequestContext): Promise<ProviderCancellation>;
+
+  /**
+   * Mapa de assentos. Opcional, e endereçado pela CHAVE DA OFERTA — na LATAM a
+   * escolha acontece antes de reservar, e o localizador ainda não existe.
+   */
+  seatMap?(key: OfferKey, context: RequestContext): Promise<ProviderSeatMap>;
+
+  /** Opcionais vendidos à parte. Endereçado pela oferta, como o mapa. */
+  ancillaries?(key: OfferKey, context: RequestContext): Promise<ProviderAncillary[]>;
+}
+
+export interface ProviderAncillary {
+  /** Opacos: o PAR identifica o serviço na compra. Devolver intactos. */
+  offerItemId: string | null;
+  serviceId: string | null;
+  name: string | null;
+  description: string | null;
+  price: { total: number; currency: string | null } | null;
+  paxId: string | null;
+  segmentId: string | null;
+}
+
+export interface ProviderSeat {
+  seat: string | null;
+  row: string | null;
+  column: string | null;
+  status: string;
+  available: boolean;
+  paid: boolean;
+  price: { total: number; currency: string | null } | null;
+  characteristic: string | null;
+  /** Opacos: o PAR identifica o assento na compra. Devolver intactos. */
+  offerItemId: string | null;
+  serviceId: string | null;
+}
+
+export interface ProviderSeatMap {
+  currency: string | null;
+  segments: Array<{
+    segmentId: string | null;
+    cabins: Array<{
+      cabinClass: string | null;
+      rows: Array<{ number: string | null; exitRow: boolean; seats: ProviderSeat[] }>;
+    }>;
+  }>;
+}
+
+/** O que o contrato precisa saber de um cancelamento. */
+export interface ProviderCancellation {
+  locator: string;
+  /** 🔴 `cancelled` só quando a companhia confirma. Pendente NÃO é cancelado. */
+  status: 'cancelled' | 'pending';
+  rawStatus: string | null;
+  /** Quanto a companhia declarou que devolve. `null` = ela não disse. */
+  refund: { total: number; currency: string | null } | null;
 }
 
 export const FLIGHT_PROVIDERS = Symbol('FLIGHT_PROVIDERS');

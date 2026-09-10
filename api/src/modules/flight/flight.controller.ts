@@ -8,7 +8,7 @@ import { Operation, RawResponse } from '../../common/interceptors/envelope.inter
 import { notSupported } from '../../common/errors/app-error';
 import { RequestContext } from '../providers/provider.types';
 import { AvailabilityDto } from './dto/availability.dto';
-import { CreateBookingDto, FareRulesDto, QuoteDto, RetrieveDto } from './dto/booking.dto';
+import { CancelBookingDto, CreateBookingDto, FareRulesDto, QuoteDto, RetrieveDto, SeatMapDto } from './dto/booking.dto';
 import { PingDto } from './dto/ping.dto';
 import { AvailabilityService } from './use-cases/availability.service';
 import { BookingService } from './use-cases/booking.service';
@@ -16,6 +16,9 @@ import { FareRulesService } from './use-cases/fare-rules.service';
 import { PingService } from './use-cases/ping.service';
 import { QuoteService } from './use-cases/quote.service';
 import { RetrieveService } from './use-cases/retrieve.service';
+import { CancelBookingService } from './use-cases/cancel-booking.service';
+import { SeatMapService } from './use-cases/seat-map.service';
+import { AncillariesService } from './use-cases/ancillaries.service';
 import { ERROR_RESPONSES, NOT_SUPPORTED_ROUTES } from './flight.swagger';
 
 type FlightRequest = Request & { correlationId?: string };
@@ -35,6 +38,9 @@ export class FlightController {
     private readonly quote: QuoteService,
     private readonly booking: BookingService,
     private readonly retrieve: RetrieveService,
+    private readonly cancel: CancelBookingService,
+    private readonly seats: SeatMapService,
+    private readonly extras: AncillariesService,
     private readonly fareRules: FareRulesService,
     private readonly pingProbe: PingService,
   ) {}
@@ -198,15 +204,50 @@ export class FlightController {
 
   @Post('cancel-booking')
   @Capability('cancelBooking')
-  @ApiTags('Não suportado pelo provedor')
-  @ApiOperation(NOT_SUPPORTED_ROUTES.cancelBooking)
-  cancelBooking(): never { throw notSupported('cancelBooking'); }
+  @Operation('cancelBooking')
+  @ApiTags('Pós-venda')
+  @ApiOperation({
+    summary: 'Cancelar a reserva',
+    description: [
+      '🔴 **Mutação não idempotente**, e roda **sem retry**. Se a resposta se perder, o caminho',
+      'é o `/retrieve` — nunca cancelar de novo, porque a primeira chamada pode ter valido.',
+      '',
+      'Na LATAM são dois passos: `OrderReshop` calcula o reembolso e `OrderCancel` executa,',
+      'porque o segundo exige `ExpectedRefundAmount`. O reshop é read-only — se ele falhar,',
+      'nada foi cancelado.',
+      '',
+      '`cancelled: false` com `status: "pending"` significa **aceito, ainda não fechado**.',
+      'Não é falha, e não autoriza tentar de novo: consulte o `/retrieve`.',
+      '',
+      'A Travelfusion responde **501**: lá o `StartBooking` já cobra, então cancelar seria',
+      'estorno, coisa que o Direct Connect não expõe.',
+    ].join('\n'),
+  })
+  @ApiBody({ type: CancelBookingDto })
+  async cancelBooking(@Body() dto: CancelBookingDto, @Req() request: FlightRequest) {
+    return this.cancel.execute(dto, contextOf(request));
+  }
 
   @Post('seat-map')
   @Capability('seatMap')
-  @ApiTags('Não suportado pelo provedor')
-  @ApiOperation(NOT_SUPPORTED_ROUTES.seatMap)
-  seatMap(): never { throw notSupported('seatMap'); }
+  @Operation('seatMap')
+  @ApiTags('Assentos')
+  @ApiOperation({
+    summary: 'Mapa de assentos da oferta',
+    description: [
+      'Read-only: não marca nada.',
+      '',
+      '🔴 **Divergência consciente do contrato canônico.** O `09-assentos.md` endereça o mapa',
+      'pelo LOCALIZADOR, assumindo escolha pós-reserva. Na LATAM o `/seats/availability`',
+      'responde pela OFERTA — a escolha é anterior, e o localizador ainda não existe.',
+      '',
+      'Mapa ilegível degrada para `segments: []`, nunca 500: a leitura degrada, a mutação falha.',
+    ].join('\n'),
+  })
+  @ApiBody({ type: SeatMapDto })
+  async seatMap(@Body() dto: SeatMapDto, @Req() request: FlightRequest) {
+    return this.seats.execute(dto, contextOf(request));
+  }
 
   @Post('mark-seats')
   @Capability('markSeats')
@@ -223,9 +264,21 @@ export class FlightController {
 
   @Post('ancillaries')
   @Capability('ancillaries')
-  @ApiTags('Não suportado pelo provedor')
-  @ApiOperation(NOT_SUPPORTED_ROUTES.ancillaries)
-  ancillaries(): never { throw notSupported('ancillaries'); }
+  @Operation('ancillaries')
+  @ApiTags('Assentos')
+  @ApiOperation({
+    summary: 'Opcionais vendidos à parte',
+    description: [
+      'Read-only. Endereçado pela OFERTA, como o /seat-map — mesma divergência, mesma razão.',
+      '',
+      'Assentos são filtrados fora: eles vêm no /seat-map, com fileira e coluna. A Travelfusion',
+      'responde 501 porque lá os opcionais já saem no /quote, em requiredParameters.',
+    ].join('\n'),
+  })
+  @ApiBody({ type: SeatMapDto })
+  async ancillaries(@Body() dto: SeatMapDto, @Req() request: FlightRequest) {
+    return this.extras.execute(dto, contextOf(request));
+  }
 
   @Post('sell-ancillaries')
   @Capability('sellAncillaries')

@@ -245,6 +245,41 @@ const OFFER_PRICE = `<?xml version="1.0" encoding="UTF-8"?>
   </Response>
 </IATA_OfferPriceRS>`;
 
+/**
+ * ReshopRS com o reembolso. O valor vive em
+ * ReshopResults/ReshopOffers/Offer/DeleteOrderItem/PriceDifferential, e é ele
+ * que o OrderCancel exige de volta em ExpectedRefundAmount.
+ */
+const ORDER_RESHOP = `<?xml version="1.0" encoding="UTF-8"?>
+<IATA_OrderReshopRS xmlns="http://www.iata.org/IATA/2015/00/2019.2/IATA_OrderReshopRS">
+  <Response>
+    <ReshopResults>
+      <ReshopOffers>
+        <Offer>
+          <DeleteOrderItem>
+            <ExistingOrderItem><OrderItemRefID>LA5446612BLWR</OrderItemRefID></ExistingOrderItem>
+            <OfferItemID>LA5446612BLWR</OfferItemID>
+            <PriceDifferential>
+              <DifferentialTypeCode>Refund</DifferentialTypeCode>
+              <DiffPrice>
+                <Price><TotalAmount CurCode="BRL">625.00</TotalAmount></Price>
+              </DiffPrice>
+            </PriceDifferential>
+          </DeleteOrderItem>
+        </Offer>
+      </ReshopOffers>
+    </ReshopResults>
+  </Response>
+</IATA_OrderReshopRS>`;
+
+/** CancelRS com a ordem em status final de cancelamento. */
+const ORDER_CANCEL = `<?xml version="1.0" encoding="UTF-8"?>
+<IATA_OrderCancelRS xmlns="http://www.iata.org/IATA/2015/00/2019.2/IATA_OrderCancelRS">
+  <Response>
+    <Order><OrderID>NW6PFQ</OrderID><StatusCode>CANCELLED</StatusCode></Order>
+  </Response>
+</IATA_OrderCancelRS>`;
+
 const ORDER_VIEW = `<?xml version="1.0" encoding="UTF-8"?>
 <IATA_OrderViewRS xmlns="http://www.iata.org/IATA/2015/00/2019.2/IATA_OrderViewRS">
   <Response>
@@ -330,12 +365,32 @@ const server = http.createServer((req, res) => {
     if (url.endsWith('/order/create')) {
       if (!/<OwnerCode>/.test(body)) return xml(schemaError('OwnerCode is expected'));
       if (!/<IndividualID>/.test(body)) return xml(schemaError('no value for the key IndividualIDKey'));
+      // A LATAM exige contato: sem ContactInfoList o OrderCreate volta 912.
+      if (!/<ContactInfoList>/.test(body)) return xml(schemaError("ContactInfoList is null or empty"));
+      // E com a lista, a referencia tem que existir — ou vao as duas, ou nenhuma.
+      if (!/<ContactInfoRefID>/.test(body)) {
+        return xml(schemaError("Key 'ContactInfoIDKeyRef13' not found"));
+      }
       return xml(ORDER_VIEW);
     }
 
     if (url.endsWith('/order/retrieve')) {
       if (!/<OrderFilterCriteria>/.test(body)) return xml(schemaError('OrderFilterCriteria is expected'));
       return xml(ORDER_VIEW);
+    }
+
+    if (url.endsWith('/order/reshop')) {
+      if (!/<OrderRefID>/.test(body)) return xml(schemaError('OrderRefID is expected'));
+      return xml(ORDER_RESHOP);
+    }
+
+    if (url.endsWith('/order/cancel')) {
+      // Sem o valor calculado no reshop a companhia nao aceita o cancelamento.
+      if (!/<ExpectedRefundAmount>/.test(body)) {
+        return xml(schemaError('ExpectedRefundAmount is expected'));
+      }
+      if (!/<OwnerCode>/.test(body)) return xml(schemaError('OwnerCode is expected'));
+      return xml(ORDER_CANCEL);
     }
 
     res.writeHead(404, { 'Content-Type': 'application/xml' });

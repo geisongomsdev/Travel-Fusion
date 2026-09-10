@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Plane, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Endpoint } from '@/components/sandbox/Endpoint';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { formatMoney, formatTime } from '@/lib/utils';
@@ -67,7 +66,7 @@ export function ResultsStep({ data, onSelect }) {
     return (
       <Card>
         <CardContent className="p-10 text-center text-sm text-muted-foreground">
-          Nenhuma oferta. Isso é resposta válida — não é erro.
+          Nenhum voo para esta rota nesta data. Tente outra data.
         </CardContent>
       </Card>
     );
@@ -75,11 +74,9 @@ export function ResultsStep({ data, onSelect }) {
 
   return (
     <div className="space-y-3">
-      <Endpoint
-        method="POST"
-        path="https://sandbox.api.latam.com/ndc/v192/airshopping"
-        note={`${flights.length} voo(s) · ${fareCount} tarifa(s). A LATAM devolve uma oferta por família tarifária, então o mesmo voo chega repetido — agrupamos por voo aqui.`}
-      />
+      <p className="text-sm text-muted-foreground">
+        {flights.length} {flights.length === 1 ? 'voo encontrado' : 'voos encontrados'}
+      </p>
       {flights.map((flight, index) => (
         <FlightCard key={index} flight={flight} onSelect={onSelect} />
       ))}
@@ -116,13 +113,13 @@ function FlightCard({ flight, onSelect }) {
 
         <div className="flex items-center gap-4">
           <div className="text-right">
-            <p className="text-lg font-medium text-primary">
+            <p className="text-lg font-medium tabular-nums">
               {formatMoney(option.fare?.price?.total?.total, option.fare?.price?.total?.currency)}
             </p>
-            <p className="text-xs text-muted-foreground">total da reserva</p>
+            <p className="text-xs text-muted-foreground">total</p>
           </div>
-          <Button size="sm"  onClick={() => onSelect(option.leg, option.fare)}>
-            Tarifar
+          <Button size="sm" onClick={() => onSelect(option.leg, option.fare)}>
+            Selecionar
           </Button>
         </div>
 

@@ -46,6 +46,13 @@ export class TravelfusionProvider implements FlightProvider {
     // Um StartRouting cobre ida ou ida-e-volta; multidestino a Travelfusion não
     // declara como pacote único.
     multicity: false,
+    // A Travelfusion não separa reservar de comprar: o `StartBooking` já cobra,
+    // então cancelar seria estorno — coisa que o Direct Connect não expõe.
+    cancelBooking: false,
+    // Depende do fornecedor por trás do agregador; o Direct Connect não expõe.
+    seatMap: false,
+    // Os opcionais da Travelfusion saem no /quote, como requiredParameters.
+    ancillaries: false,
   };
 
   constructor(private readonly commands: TravelfusionCommands) {}

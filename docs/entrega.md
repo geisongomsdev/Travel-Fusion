@@ -88,9 +88,9 @@ Prazo estimado por eles depois que tudo isso entra: **2 a 3 semanas** de auditor
 
 | # | O quê | Onde |
 |---|---|---|
-| 1 | **`ListSupplierRoutes` ligado à busca.** Está implementado mas não plugado. Buscar rota que o fornecedor não atende é reprova direta | `provider/commands.js` → `SearchAvailability.js` |
+| 1 | **`ListSupplierRoutes` ligado à busca.** Está implementado mas não plugado. Buscar rota que o fornecedor não atende é reprova direta | `travelfusion/travelfusion.commands.ts` → `availability.service.ts` |
 | 2 | **3D Secure / Credit Card Verification.** Ainda não desenhado | — |
-| 3 | **Preço por perna × por grupo.** Hoje leio um total só; a spec exige interpretar os dois casos | `routing.normalizer.js` |
+| 3 | **Preço por perna × por grupo.** Hoje leio um total só; a spec exige interpretar os dois casos | `travelfusion/normalizers/routing.normalizer.ts` |
 
 ### 3.3 Lacunas do contrato que eu conheço
 
@@ -100,7 +100,7 @@ Estas são minhas, não do provedor:
 |---|---|---|
 | 1 | **`roundtrip` emite `groups` com `return: []`** — meia viagem, que o contrato manda suprimir. Falta tratar o `ReturnId` do `StartRouting`. **Só `oneway` está realmente correto hoje** | alta |
 | 2 | `multicity` monta `legs: [[leg]]` — um balde por trecho, sem as opções de horário pelo mesmo preço | alta |
-| 3 | `options.refundable` e `options.class` chegam no pedido e **não são aplicados** | média |
+| ~~3~~ | ~~`options.refundable` e `options.class` não são aplicados~~ — **resolvido**: filtram em `AvailabilityService.applyOptionFilters`, na camada do contrato, e valem para os dois provedores. A cabine deixou de ir no `AirShopping` porque a LATAM devolve 0 ofertas com `PreferredCabinType C` numa busca que sem o filtro devolve 424 | — |
 | 4 | Um `provider_success` só, ao final. Com mais de um fornecedor na branch, deveria sair um por fornecedor conforme completa | média |
 | 5 | `fares[].fees` sempre `[]`, `baggage` e `benefits` todos `null` — aceito pelo contrato, mas dá para preencher a partir dos CSPs | baixa |
 | 6 | `/retrieve` devolve `trip`, `segments` e `itinerary` como `null`: o `CheckBooking` não traz os trechos | baixa — é limite do provedor |

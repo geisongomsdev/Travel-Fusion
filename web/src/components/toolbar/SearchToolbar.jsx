@@ -14,8 +14,8 @@ import { TOOLBAR_CHIP, TOOLBAR_ICON, TOOLBAR_ICON_STROKE_WIDTH } from './toolbar
  */
 
 const PROVIDERS = [
-  { value: 'latam', label: 'LATAM NDC', hint: 'síncrono' },
-  { value: 'travelfusion', label: 'Travelfusion', hint: 'polling' },
+  { value: 'latam', label: 'LATAM' },
+  { value: 'travelfusion', label: 'Travelfusion' },
 ];
 
 const TRIP_TYPES = [
@@ -25,10 +25,10 @@ const TRIP_TYPES = [
 ];
 
 const CABINS = [
-  { value: 'economy', label: 'Economy', code: 'Y' },
-  { value: 'premium_economy', label: 'Premium Economy', code: 'W' },
-  { value: 'business', label: 'Business', code: 'C' },
-  { value: 'first', label: 'First', code: 'F' },
+  { value: 'economy', label: 'Econômica' },
+  { value: 'premium_economy', label: 'Premium Economy' },
+  { value: 'business', label: 'Executiva' },
+  { value: 'first', label: 'Primeira classe' },
 ];
 
 const PASSENGERS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -53,7 +53,6 @@ export function SearchToolbar({ form, onChange, onSwap, onSubmit, running }) {
           {PROVIDERS.map((provider) => (
             <SelectItem key={provider.value} value={provider.value}>
               {provider.label}
-              <span className="ml-1 text-xs text-muted-foreground">{provider.hint}</span>
             </SelectItem>
           ))}
         </SelectContent>
@@ -129,7 +128,6 @@ export function SearchToolbar({ form, onChange, onSwap, onSubmit, running }) {
           {CABINS.map((cabin) => (
             <SelectItem key={cabin.value} value={cabin.value}>
               {cabin.label}
-              <span className="ml-1 font-mono text-xs text-muted-foreground">{cabin.code}</span>
             </SelectItem>
           ))}
         </SelectContent>

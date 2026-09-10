@@ -5,14 +5,16 @@ import { passengerTypeCode } from '../../../common/utils/age';
 import { OfferKey } from '../../../common/utils/offer-key';
 import { LATAM } from '../../../config/env';
 import { AvailabilityDto } from '../../flight/dto/availability.dto';
-import { CreateBookingDto, FareRulesDto, QuoteDto } from '../../flight/dto/booking.dto';
+import { CreateBookingDto, QuoteDto } from '../../flight/dto/booking.dto';
 import {
   FareRuleSection, FlightProvider, ProviderBooking, ProviderOffer, ProviderProbe, ProviderQuote,
-  ProviderRetrieval, RequestContext,
+  ProviderAncillary, ProviderCancellation, ProviderRetrieval, ProviderSeatMap, RequestContext,
 } from '../provider.types';
 import { asList, attr, child, num, text, XmlValue } from '../../../common/xml/xml.util';
 import { buildPaxList, LatamCommands } from './latam.commands';
 import { normalizeAirShopping } from './normalizers/offer.normalizer';
+import { normalizeSeatMap } from './normalizers/seat.normalizer';
+import { normalizeServiceList } from './normalizers/service.normalizer';
 
 /**
  * Status de ordem da LATAM que são FINAIS. Só eles autorizam dizer `confirmed`.
@@ -39,6 +41,12 @@ export class LatamProvider implements FlightProvider {
     fareRules: false,
     retrieve: true,
     multicity: true,
+    // OrderReshop calcula o reembolso, OrderCancel executa. As duas rotas existem.
+    cancelBooking: true,
+    // /seats/availability está no YAML publicado e responde pela oferta.
+    seatMap: true,
+    // /services/list, mesma forma do mapa de assentos.
+    ancillaries: true,
   };
 
   constructor(private readonly commands: LatamCommands) {}
@@ -68,8 +76,18 @@ export class LatamProvider implements FlightProvider {
       babies: request.passengers.babies ?? 0,
     };
 
+    /**
+     * 🔴 A cabine NÃO vai para o AirShopping, e isso é medido, não preferência:
+     * com `PreferredCabinType C` a LATAM devolve 0 ofertas na mesma busca em
+     * que, sem o filtro, devolve 424 — 12 delas business. Mandar o critério
+     * para cima esconde oferta que existe.
+     *
+     * O filtro de cabine acontece na camada do contrato
+     * (`AvailabilityService.applyOptionFilters`), que vê a tarifa já normalizada
+     * e vale igual para os dois provedores.
+     */
     const { payload } = await this.commands.airShopping(
-      { legs: request.legs, passengers, cabin: request.options?.class ?? null },
+      { legs: request.legs, passengers, cabin: null },
       context,
     );
 
@@ -131,6 +149,35 @@ export class LatamProvider implements FlightProvider {
     const counters: Record<string, number> = { ADT: 0, CHD: 0, INF: 0 };
 
     /**
+     * E-mail e telefone são CSPs do nível da RESERVA (o /quote os declara com
+     * `perPassenger: false`), mas a NDC quer um ContactInfo por passageiro —
+     * então o mesmo contato é replicado, um por PaxID.
+     *
+     * 🔴 A LATAM EXIGE o contato: sem ele o OrderCreate volta
+     * `912 ContactInfoList is null or empty`. E omitir só a referência para
+     * fugir disso troca um erro por outro — vira
+     * `cvc-identity-constraint.4.3: Key 'ContactInfoIDKeyRef13' not found`.
+     * Os dois são a mesma coisa dita de dois jeitos: contato é obrigatório.
+     *
+     * Por isso a recusa acontece AQUI, antes da rede, com o campo que falta
+     * nomeado — do mesmo jeito que a credencial em branco falha no client.
+     */
+    const email = dto.customParameters?.email;
+    const phone = dto.customParameters?.phone;
+
+    if (!email && !phone) {
+      throw new AppError('SEARCH_VALIDATION_ERROR', {
+        metadata: { operation: 'createBooking' },
+        details: {
+          errors: {
+            'customParameters.email': ['Obrigatório: a LATAM exige contato para criar a ordem.'],
+            'customParameters.phone': ['Obrigatório: a LATAM exige contato para criar a ordem.'],
+          },
+        },
+      });
+    }
+
+    /**
      * 🔴 A ORDEM dos elementos é do XSD, não estética: `ContactInfoRefID`,
      * `IdentityDoc`, `Individual`, `PaxID`, `PTC` — e dentro do Individual,
      * `Birthdate` antes do nome. Fora dessa sequência a LATAM devolve
@@ -159,26 +206,116 @@ export class LatamProvider implements FlightProvider {
       };
     });
 
-    /**
-     * E-mail e telefone são CSPs do nível da RESERVA (o /quote os declara com
-     * `perPassenger: false`), mas a NDC quer um ContactInfo por passageiro —
-     * então o mesmo contato é replicado, um por PaxID.
-     */
-    const email = dto.customParameters?.email;
-    const phone = dto.customParameters?.phone;
-
-    const contacts = email || phone
-      ? paxList.map((pax) => ({
-        ContactInfoID: `${pax.PaxID}_CNT`,
-        EmailAddress: email ? { EmailAddressText: email } : undefined,
-        Phone: phone
-          ? { ContactTypeText: 'MOBILE', PhoneNumber: phone.replace(/\D/g, '') }
-          : undefined,
-      }))
-      : [];
+    // Um ContactInfo por PaxID, todos apontando para o mesmo contato da reserva.
+    const contacts = paxList.map((pax) => ({
+      ContactInfoID: `${pax.PaxID}_CNT`,
+      EmailAddress: email ? { EmailAddressText: email } : undefined,
+      Phone: phone
+        ? { ContactTypeText: 'MOBILE', PhoneNumber: phone.replace(/\D/g, '') }
+        : undefined,
+    }));
 
     const { payload } = await this.commands.orderCreate(key.r, key.i ?? null, paxList, contacts, context);
     return this.readOrder(payload, 'createBooking');
+  }
+
+  /**
+   * Cancelar é DOIS passos na LATAM, e o primeiro não é opcional.
+   *
+   * 🔴 `OrderReshop` calcula quanto volta, e o `OrderCancel` exige esse valor em
+   * `ExpectedRefundAmount`. É o jeito da companhia garantir que quem cancela
+   * concorda com o reembolso — mandar um número inventado é pedir para a ordem
+   * ser recusada, ou pior, aceita com um valor que ninguém conferiu.
+   *
+   * O reshop é read-only: se ele falhar, nada foi cancelado.
+   */
+  async cancelBooking(locator: string, context: RequestContext): Promise<ProviderCancellation> {
+    const { payload: quote } = await this.commands.orderReshop(locator, context);
+
+    const refund = this.readRefund(quote);
+    if (refund === null) {
+      /**
+       * Sem valor não dá para seguir: o OrderCancel não aceita a mensagem sem
+       * `ExpectedRefundAmount`, e chutar zero cancelaria abrindo mão do
+       * reembolso. Melhor parar e devolver o motivo.
+       */
+      throw new AppError('PROVIDER_INTEGRATION_ERROR', {
+        metadata: { operation: 'cancelBooking' },
+        providerError: {
+          provider: LATAM,
+          operation: 'OrderReshop',
+          providerCode: 'NO_REFUND_QUOTE',
+          providerMessage: 'O OrderReshop não devolveu valor de reembolso; cancelamento não foi tentado.',
+          providerSeverity: null,
+          httpStatus: null,
+        },
+      });
+    }
+
+    const { payload } = await this.commands.orderCancel(locator, refund.total, context);
+
+    const status = (text(child(payload, 'Order', 'StatusCode'))
+      ?? text(child(payload, 'Order', 'OrderStatusCode'))
+      ?? '').toUpperCase();
+
+    return {
+      locator,
+      // Só os status finais de falha significam cancelado de verdade.
+      status: FAILED_STATUSES.has(status) ? 'cancelled' : 'pending',
+      rawStatus: status || null,
+      refund,
+    };
+  }
+
+  /** O reembolso vem como `PriceDifferential` de tipo `Refund` no ReshopRS. */
+  private readRefund(payload: XmlValue): { total: number; currency: string | null } | null {
+    const offers = asList(child(payload, 'ReshopResults', 'ReshopOffers', 'Offer'));
+
+    for (const offer of offers) {
+      for (const item of asList(child(offer, 'DeleteOrderItem'))) {
+        const differential = child(item, 'PriceDifferential');
+        if ((text(child(differential, 'DifferentialTypeCode')) ?? '').toLowerCase() !== 'refund') continue;
+
+        // A amostra aninha em `DiffPrice/Price`; há resposta com o total um
+        // nível acima, então os dois caminhos são tentados.
+        const nested = amount(child(differential, 'DiffPrice', 'Price', 'TotalAmount'));
+        const money = nested.value !== null
+          ? nested
+          : amount(child(differential, 'DiffPrice', 'TotalAmount'));
+
+        // `roundMoney` devolve `null` para valor não-finito; aqui já sabemos que
+        // é número, então o fallback é o próprio valor, nunca um zero inventado.
+        const total = money.value;
+        if (total !== null) return { total: roundMoney(total) ?? total, currency: money.currency };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Mapa de assentos da oferta.
+   *
+   * 🔴 Endereçado pela OFERTA, não pelo localizador: na LATAM a escolha de
+   * assento é anterior à reserva. Os PaxIDs vêm da chave, pelo mesmo motivo do
+   * OfferPrice — a companhia devolve o mapa por passageiro.
+   */
+  async seatMap(key: OfferKey, context: RequestContext): Promise<ProviderSeatMap> {
+    /**
+     * 🔴 Aqui o `OfferID` é o `SEI|…` do ITEM, não o UUID da oferta — a amostra
+     * do portal usa esse formato e o gateway confirma: com o UUID ele responde
+     * `911 Public flight offer not found in cache by id <uuid>`. É a mesma
+     * palavra (`OfferID`) valendo coisas diferentes em duas mensagens.
+     */
+    const offerId = key.i ?? key.r;
+    const { payload } = await this.commands.seatAvailability(offerId, key.x ?? [], context);
+    return normalizeSeatMap(payload);
+  }
+
+  /** Opcionais da oferta. Mesmo endereçamento do mapa: pelo item, não pelo UUID. */
+  async ancillaries(key: OfferKey, context: RequestContext): Promise<ProviderAncillary[]> {
+    const { payload } = await this.commands.serviceList(key.i ?? key.r, key.x ?? [], context);
+    return normalizeServiceList(payload);
   }
 
   async retrieve(locator: string, context: RequestContext): Promise<ProviderRetrieval> {

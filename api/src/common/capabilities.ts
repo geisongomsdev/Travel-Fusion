@@ -1,5 +1,5 @@
 /**
- * O que a Travelfusion realmente faz — 01-convencoes.md §8.
+ * O que cada provedor realmente faz — 01-convencoes.md §8.
  *
  * `false` significa "existe no contrato, o provedor não faz" → 501
  * CAPABILITY_NOT_SUPPORTED. Nunca devolver o XML cru como consolo.
@@ -48,6 +48,57 @@ export const TRAVELFUSION_CAPABILITIES: Record<FlightOperation, boolean> = {
   cancelEticket:    false,
 };
 
-export function supportsOperation(operation: FlightOperation): boolean {
-  return TRAVELFUSION_CAPABILITIES[operation] === true;
+/**
+ * O que a LATAM NDC faz. As rotas foram conferidas uma a uma contra o sandbox.
+ */
+export const LATAM_CAPABILITIES: Record<FlightOperation, boolean> = {
+  availability:     true,  // AirShopping
+  quote:            true,  // OfferPrice
+  booking:          true,  // OrderCreate
+  retrieve:         true,  // OrderRetrieve
+  cancelBooking:    true,  // OrderReshop + OrderCancel
+  ping:             true,  // o proprio OAuth2 prova a credencial
+
+  /**
+   * A NDC devolve penalidade ESTRUTURADA, nao o texto integral da tarifa que o
+   * /fare-rules exige. Publicar aquilo como "condicoes" seria dizer que e o que
+   * nao e.
+   */
+  fareRules:        false,
+
+  seatMap:          true,   // /seats/availability, pela oferta
+  ancillaries:      true,   // /services/list, pela oferta
+
+  // Existem na NDC, ainda nao integrados aqui — divida nossa, nao ausencia deles.
+  markSeats:        false,
+  removeSeats:      false,
+  sellAncillaries:  false,
+  paymentOptions:   false,
+  financingOptions: false,
+  issue:            false,
+  retrieveEticket:  false,
+  cancelEticket:    false,
+};
+
+const CAPABILITIES_BY_PROVIDER: Record<string, Record<FlightOperation, boolean>> = {
+  travelfusion: TRAVELFUSION_CAPABILITIES,
+  latam:        LATAM_CAPABILITIES,
+};
+
+/**
+ * 🔴 O guard roda ANTES de validar o corpo, e o provedor vem NO corpo — logo,
+ * aqui ainda nao da para saber de quem e a requisicao. Por isso a pergunta e
+ * "ALGUM provedor no ar faz isso?": operacao que ninguem implementa morre cedo,
+ * com 501 e sem confundir o motivo; operacao que so um faz passa e o caso de uso
+ * decide, olhando o `supports` do provedor escolhido.
+ *
+ * Antes disso o mapa era so o da Travelfusion, e o /cancel-booking respondia 501
+ * mesmo com a LATAM — que cancela.
+ */
+export function supportsOperation(operation: FlightOperation, providers?: string[]): boolean {
+  const enabled = providers?.length
+    ? providers
+    : Object.keys(CAPABILITIES_BY_PROVIDER);
+
+  return enabled.some((name) => CAPABILITIES_BY_PROVIDER[name.toLowerCase()]?.[operation] === true);
 }
