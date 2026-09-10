@@ -31,6 +31,8 @@ export default function App() {
   const [retrieved, setRetrieved] = useState(null);
   const [cancellation, setCancellation] = useState(null);
   const [seatMap, setSeatMap] = useState(null);
+  const [ancillaries, setAncillaries] = useState([]);
+  const [extras, setExtras] = useState([]);
   const [seat, setSeat] = useState(null);
   const [loadingSeats, setLoadingSeats] = useState(false);
 
@@ -46,6 +48,8 @@ export default function App() {
     setCancellation(null);
     setSeatMap(null);
     setSeat(null);
+    setAncillaries([]);
+    setExtras([]);
     setError(null);
   };
 
@@ -87,6 +91,14 @@ export default function App() {
       const response = await post('/quote', { identifier: leg.identifier });
       setQuote(response.data);
       setStep(2);
+
+      /**
+       * Os opcionais são leitura independente e podem falhar sem derrubar a
+       * tarifação — por isso ficam fora do try principal.
+       */
+      post('/ancillaries', { identifier: leg.identifier })
+        .then((extra) => setAncillaries(extra.data?.ancillaries ?? []))
+        .catch(() => setAncillaries([]));
     } catch (quoteError) {
       setError(quoteError);
     } finally {
@@ -227,6 +239,13 @@ export default function App() {
             selection={selection}
             parameters={parameters}
             onChangeParameter={(name, value) => setParameters((prev) => ({ ...prev, [name]: value }))}
+            ancillaries={ancillaries}
+            extras={extras}
+            onToggleExtra={(item) => setExtras((prev) => (
+              prev.some((x) => x.offerItemId === item.offerItemId)
+                ? prev.filter((x) => x.offerItemId !== item.offerItemId)
+                : [...prev, item]
+            ))}
             seatMap={seatMap}
             seat={seat}
             loadingSeats={loadingSeats}

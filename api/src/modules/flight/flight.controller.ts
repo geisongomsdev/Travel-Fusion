@@ -18,6 +18,7 @@ import { QuoteService } from './use-cases/quote.service';
 import { RetrieveService } from './use-cases/retrieve.service';
 import { CancelBookingService } from './use-cases/cancel-booking.service';
 import { SeatMapService } from './use-cases/seat-map.service';
+import { AncillariesService } from './use-cases/ancillaries.service';
 import { ERROR_RESPONSES, NOT_SUPPORTED_ROUTES } from './flight.swagger';
 
 type FlightRequest = Request & { correlationId?: string };
@@ -39,6 +40,7 @@ export class FlightController {
     private readonly retrieve: RetrieveService,
     private readonly cancel: CancelBookingService,
     private readonly seats: SeatMapService,
+    private readonly extras: AncillariesService,
     private readonly fareRules: FareRulesService,
     private readonly pingProbe: PingService,
   ) {}
@@ -262,9 +264,21 @@ export class FlightController {
 
   @Post('ancillaries')
   @Capability('ancillaries')
-  @ApiTags('Não suportado pelo provedor')
-  @ApiOperation(NOT_SUPPORTED_ROUTES.ancillaries)
-  ancillaries(): never { throw notSupported('ancillaries'); }
+  @Operation('ancillaries')
+  @ApiTags('Assentos')
+  @ApiOperation({
+    summary: 'Opcionais vendidos à parte',
+    description: [
+      'Read-only. Endereçado pela OFERTA, como o /seat-map — mesma divergência, mesma razão.',
+      '',
+      'Assentos são filtrados fora: eles vêm no /seat-map, com fileira e coluna. A Travelfusion',
+      'responde 501 porque lá os opcionais já saem no /quote, em requiredParameters.',
+    ].join('\n'),
+  })
+  @ApiBody({ type: SeatMapDto })
+  async ancillaries(@Body() dto: SeatMapDto, @Req() request: FlightRequest) {
+    return this.extras.execute(dto, contextOf(request));
+  }
 
   @Post('sell-ancillaries')
   @Capability('sellAncillaries')

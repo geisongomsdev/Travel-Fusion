@@ -222,9 +222,11 @@ Travelfusion, e o `/cancel-booking` respondia 501 mesmo com a LATAM, que cancela
 | `/booking` | ✅ OrderCreate | ✅ ProcessTerms + StartBooking |
 | `/retrieve` | ✅ OrderRetrieve | ✅ CheckBooking |
 | `/cancel-booking` | ✅ OrderReshop + OrderCancel | 501 — `StartBooking` já cobra, cancelar seria estorno |
+| `/seat-map` | ✅ SeatAvailability, **pela oferta** | 501 — depende do fornecedor por trás do agregador |
+| `/ancillaries` | ✅ ServiceList, **pela oferta** | 501 — saem no `/quote`, em `requiredParameters` |
 | `/fare-rules` | 501 — devolve penalidade estruturada, não o texto da tarifa | ✅ vem no ProcessDetails |
 | `/ping` | ✅ o próprio OAuth2 prova a credencial | ✅ Login |
-| assentos, ancillaries, pagamento, emissão, e-ticket | 501 | 501 |
+| pagamento, emissão, e-ticket | 501 | 501 |
 
 | | |
 |---|---|
@@ -235,13 +237,35 @@ O fluxo completo foi percorrido contra o sandbox real da LATAM: busca GRU→SCL 
 tarifação, reserva (`LA9574345ABYG`, `OPENED`) e recuperação da ordem com passageiro, documento e
 nascimento de volta.
 
-**O `/cancel-booking` fica com uma verificação parcial, e vale dizer por quê.** A rota está
-implementada e ligada, o duble cobre os dois passos, e contra o sandbox ela chega ao provedor e
-recebe `400107002 Invalid order current status` — porque a LATAM só cancela ordem **paga**, e as
-ordens criadas aqui ficam em `OPENED`. Fechar isso exige um cartão de teste, que para POS ≠ CL
-precisa ser pedido ao time da LATAM (`operations/order-create-payment.md`). O erro é classificado
-como `RESOURCE_CONFLICT`, não como payload inválido: o corpo está certo, o estado da ordem é que não
-permite.
+### O muro do cartão de teste
+
+Três coisas param no mesmo lugar, e é honesto agrupá-las: a LATAM só as libera sobre
+uma ordem **paga**, e as ordens criadas aqui ficam em `OPENED`. Pagar exige cartão de
+teste, que para POS ≠ `CL` precisa ser pedido ao time deles (`operations/order-create-payment.md`).
+
+| O quê | Onde parou |
+|---|---|
+| `/cancel-booking` | Chega ao provedor e recebe `400107002 Invalid order current status` |
+| **Comprar** o assento | Ver abaixo |
+| Emissão | Não existe como operação separada na LATAM — quem emite é o pagamento |
+
+**Sobre comprar o assento**, o caminho foi sondado até o fim e os três erros dizem a
+mesma coisa por ângulos diferentes:
+
+1. `SelectedOfferItem` do assento junto com o do voo no `OrderCreate` →
+   `400112165 SelectedBundleServices/SelectedServiceRefID is required`
+2. Com o `SelectedServiceRefID` do `ALaCarteOfferItem` →
+   `400112102 Invalid SelectedServiceRefID`
+3. Seguindo o fluxo publicado, com o assento já no `OfferPrice` →
+   `INVALID_OFFER_TYPES: Mixed type offers are not supported`
+
+Ou seja: a oferta de voo e a à-la-carte **não se misturam na mesma mensagem**. O assento
+entra pelo `OrderChange` da **v241** (`/ndc/v241/order/change`), que exige
+`PaymentFunctions` e ordem já emitida — o mesmo muro.
+
+Por isso `/seat-map` e `/ancillaries` são **leitura**: mostram o que existe e por quanto,
+com o par opaco (`offerItemId` + `serviceId`) preservado para quem for comprar depois.
+Escolher na tela não grava na companhia, e a tela não diz que grava.
 
 ### `options.refundable` e `options.class`
 

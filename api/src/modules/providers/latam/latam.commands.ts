@@ -25,6 +25,7 @@ export const PATHS = {
   orderCancel: process.env.LATAM_PATH_ORDER_CANCEL ?? '/ndc/v192/order/cancel',
   orderReshop: process.env.LATAM_PATH_ORDER_RESHOP ?? '/ndc/v192/order/reshop',
   seatAvailability: process.env.LATAM_PATH_SEATS ?? '/ndc/v192/seats/availability',
+  serviceList: process.env.LATAM_PATH_SERVICES ?? '/ndc/v192/services/list',
 };
 
 /** Envelope NDC: cada mensagem tem o SEU namespace, derivado do nome. */
@@ -236,6 +237,24 @@ export class LatamCommands {
       envelope('IATA_SeatAvailabilityRQ', inner),
       context,
     );
+  }
+
+  /**
+   * ServiceList = os opcionais vendidos à parte (bagagem extra, etc).
+   *
+   * Mesma forma do SeatAvailability, e endereçado do mesmo jeito: pela OFERTA.
+   * O fluxo publicado é AirShopping → SeatAvailability → ServiceList →
+   * OfferPrice → OrderCreate.
+   */
+  async serviceList(offerId: string, paxIds: string[], context: RequestContext): Promise<LatamResult> {
+    const pax = paxIds.length > 0 ? paxIds : ['ADT_1'];
+
+    const inner = partyAndPos(context)
+      + `<Request>${toXml('CoreRequest', { Offer: { OfferID: offerId } })}`
+      + toXml('Pax', pax.map((paxId) => ({ PaxID: paxId, PTC: paxId.split('_')[0] })))
+      + '</Request>';
+
+    return this.client.send('ServiceList', PATHS.serviceList, envelope('IATA_ServiceListRQ', inner), context);
   }
 
   /**

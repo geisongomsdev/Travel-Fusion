@@ -26,6 +26,7 @@ const OPERATION_TIMEOUTS: Record<string, { readMs: number; retries: number }> = 
   OrderRetrieve: { readMs: 30000, retries: 1 },
   // Leituras: retry é seguro porque nada é gravado.
   SeatAvailability: { readMs: 45000, retries: 1 },
+  ServiceList: { readMs: 45000, retries: 1 },
   OrderReshop: { readMs: 45000, retries: 1 },
   OrderCancel: { readMs: 45000, retries: 0 },
 };

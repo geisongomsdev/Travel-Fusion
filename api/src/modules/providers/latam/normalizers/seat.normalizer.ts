@@ -40,6 +40,14 @@ export function normalizeSeatMap(payload: XmlValue): ProviderSeatMap {
      */
     const priceByItem = new Map<string, { total: number; currency: string | null }>();
 
+    /**
+     * 🔴 O `ServiceID` do item é OBRIGATÓRIO na compra: sem
+     * `SelectedBundleServices/SelectedServiceRefID` o OrderCreate responde
+     * `400112165`. Ele não aparece no `SeatRow` — só aqui, no ALaCarteOfferItem
+     * — então é indexado junto com o preço.
+     */
+    const serviceByItem = new Map<string, string>();
+
     for (const item of asList(child(payload, 'ALaCarteOffer', 'ALaCarteOfferItem'))) {
       const id = text(child(item, 'OfferItemID'));
       if (!id) continue;
@@ -49,6 +57,9 @@ export function normalizeSeatMap(payload: XmlValue): ProviderSeatMap {
       if (value === null) continue;
 
       priceByItem.set(id, { total: roundMoney(value) ?? value, currency: attr(amount, 'CurCode') });
+
+      const serviceId = text(child(item, 'Service', 'ServiceID'));
+      if (serviceId) serviceByItem.set(id, serviceId);
     }
 
     let currency: string | null = null;
@@ -87,8 +98,9 @@ export function normalizeSeatMap(payload: XmlValue): ProviderSeatMap {
             paid: price !== null && price.total > 0,
             price,
             characteristic: characteristic ? CHARACTERISTIC[characteristic.toUpperCase()] ?? null : null,
-            /** Devolvido intacto: é ele que identifica o assento na compra. */
+            /** Os dois voltam intactos: é o par que identifica o assento na compra. */
             offerItemId: itemId,
+            serviceId: itemId ? serviceByItem.get(itemId) ?? null : null,
           };
         });
 

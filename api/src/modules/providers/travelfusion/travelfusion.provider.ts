@@ -51,6 +51,8 @@ export class TravelfusionProvider implements FlightProvider {
     cancelBooking: false,
     // Depende do fornecedor por trás do agregador; o Direct Connect não expõe.
     seatMap: false,
+    // Os opcionais da Travelfusion saem no /quote, como requiredParameters.
+    ancillaries: false,
   };
 
   constructor(private readonly commands: TravelfusionCommands) {}

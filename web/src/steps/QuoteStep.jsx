@@ -16,6 +16,7 @@ import { cn, formatMoney, formatTime } from '@/lib/utils';
 export function QuoteStep({
   quote, selection, onContinue, onChangeParameter, parameters,
   seatMap, seat, loadingSeats, onLoadSeatMap, onSelectSeat,
+  ancillaries = [], extras = [], onToggleExtra,
 }) {
   const [seatsOpen, setSeatsOpen] = useState(false);
 
@@ -87,7 +88,7 @@ export function QuoteStep({
           </CardContent>
         </Card>
 
-        {selectable.length > 0 && (
+        {(selectable.length > 0 || ancillaries.length > 0) && (
           <Card>
             <CardHeader>
               <CardTitle>Bagagem e serviços</CardTitle>
@@ -96,6 +97,34 @@ export function QuoteStep({
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Opcionais da LATAM: catálogo próprio, vindo do /ancillaries. */}
+              {ancillaries.map((item) => {
+                const chosen = extras.some((x) => x.offerItemId === item.offerItemId);
+                return (
+                  <button
+                    key={item.offerItemId}
+                    type="button"
+                    onClick={() => onToggleExtra(item)}
+                    className={cn(
+                      'flex w-full items-center justify-between gap-3 rounded-lg border px-3.5 py-2.5 text-left text-sm transition-colors',
+                      chosen
+                        ? 'border-primary bg-accent font-medium text-accent-foreground'
+                        : 'border-border hover:border-primary/40 hover:bg-accent/40',
+                    )}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate">{labelForAncillary(item)}</span>
+                      {item.description && (
+                        <span className="block truncate text-xs text-muted-foreground">{item.description}</span>
+                      )}
+                    </span>
+                    <span className="shrink-0 font-semibold tabular-nums">
+                      {item.price ? formatMoney(item.price.total, item.price.currency) : '—'}
+                    </span>
+                  </button>
+                );
+              })}
+
               {selectable.map((parameter) => (
                 <div key={parameter.name} className="space-y-2">
                   <p className="text-sm font-medium">{labelFor(parameter.name)}</p>
@@ -171,6 +200,17 @@ function Row({ label, value, strong }) {
       <span className={cn('tabular-nums', strong ? 'text-lg font-semibold' : 'font-medium')}>{value}</span>
     </div>
   );
+}
+
+/** Os nomes vêm em SNAKE_CASE do catálogo da companhia. */
+function labelForAncillary(item) {
+  const map = {
+    CARRY_ON: 'Bagagem de mão',
+    FIRST_ADDITIONAL_BAGGAGE: '1ª bagagem despachada',
+    SECOND_ADDITIONAL_BAGGAGE: '2ª bagagem despachada',
+    OVERWEIGHT: 'Bagagem acima do peso',
+  };
+  return map[item.name] ?? (item.name ?? '').replace(/_/g, ' ').toLowerCase();
 }
 
 function labelFor(name) {

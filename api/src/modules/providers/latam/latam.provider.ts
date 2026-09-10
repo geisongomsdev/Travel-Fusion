@@ -8,12 +8,13 @@ import { AvailabilityDto } from '../../flight/dto/availability.dto';
 import { CreateBookingDto, QuoteDto } from '../../flight/dto/booking.dto';
 import {
   FareRuleSection, FlightProvider, ProviderBooking, ProviderOffer, ProviderProbe, ProviderQuote,
-  ProviderCancellation, ProviderRetrieval, ProviderSeatMap, RequestContext,
+  ProviderAncillary, ProviderCancellation, ProviderRetrieval, ProviderSeatMap, RequestContext,
 } from '../provider.types';
 import { asList, attr, child, num, text, XmlValue } from '../../../common/xml/xml.util';
 import { buildPaxList, LatamCommands } from './latam.commands';
 import { normalizeAirShopping } from './normalizers/offer.normalizer';
 import { normalizeSeatMap } from './normalizers/seat.normalizer';
+import { normalizeServiceList } from './normalizers/service.normalizer';
 
 /**
  * Status de ordem da LATAM que são FINAIS. Só eles autorizam dizer `confirmed`.
@@ -44,6 +45,8 @@ export class LatamProvider implements FlightProvider {
     cancelBooking: true,
     // /seats/availability está no YAML publicado e responde pela oferta.
     seatMap: true,
+    // /services/list, mesma forma do mapa de assentos.
+    ancillaries: true,
   };
 
   constructor(private readonly commands: LatamCommands) {}
@@ -307,6 +310,12 @@ export class LatamProvider implements FlightProvider {
     const offerId = key.i ?? key.r;
     const { payload } = await this.commands.seatAvailability(offerId, key.x ?? [], context);
     return normalizeSeatMap(payload);
+  }
+
+  /** Opcionais da oferta. Mesmo endereçamento do mapa: pelo item, não pelo UUID. */
+  async ancillaries(key: OfferKey, context: RequestContext): Promise<ProviderAncillary[]> {
+    const { payload } = await this.commands.serviceList(key.i ?? key.r, key.x ?? [], context);
+    return normalizeServiceList(payload);
   }
 
   async retrieve(locator: string, context: RequestContext): Promise<ProviderRetrieval> {

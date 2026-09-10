@@ -115,6 +115,7 @@ export interface FlightProvider {
     multicity: boolean;
     cancelBooking: boolean;
     seatMap: boolean;
+    ancillaries: boolean;
   };
 
   probe(context: RequestContext): Promise<ProviderProbe>;
@@ -140,6 +141,20 @@ export interface FlightProvider {
    * escolha acontece antes de reservar, e o localizador ainda não existe.
    */
   seatMap?(key: OfferKey, context: RequestContext): Promise<ProviderSeatMap>;
+
+  /** Opcionais vendidos à parte. Endereçado pela oferta, como o mapa. */
+  ancillaries?(key: OfferKey, context: RequestContext): Promise<ProviderAncillary[]>;
+}
+
+export interface ProviderAncillary {
+  /** Opacos: o PAR identifica o serviço na compra. Devolver intactos. */
+  offerItemId: string | null;
+  serviceId: string | null;
+  name: string | null;
+  description: string | null;
+  price: { total: number; currency: string | null } | null;
+  paxId: string | null;
+  segmentId: string | null;
 }
 
 export interface ProviderSeat {
@@ -151,8 +166,9 @@ export interface ProviderSeat {
   paid: boolean;
   price: { total: number; currency: string | null } | null;
   characteristic: string | null;
-  /** Opaco: identifica o assento na hora de comprar. Devolver intacto. */
+  /** Opacos: o PAR identifica o assento na compra. Devolver intactos. */
   offerItemId: string | null;
+  serviceId: string | null;
 }
 
 export interface ProviderSeatMap {
