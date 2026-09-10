@@ -10,10 +10,12 @@ import { RetrieveService } from './use-cases/retrieve.service';
 import { CancelBookingService } from './use-cases/cancel-booking.service';
 import { SeatMapService } from './use-cases/seat-map.service';
 import { AncillariesService } from './use-cases/ancillaries.service';
+import { PaymentService } from './use-cases/payment.service';
+import { SellAncillariesService } from './use-cases/sell-ancillaries.service';
 
 @Module({
   imports: [ProvidersModule],
   controllers: [FlightController],
-  providers: [AvailabilityService, QuoteService, BookingService, RetrieveService, CancelBookingService, SeatMapService, AncillariesService, FareRulesService, PingService],
+  providers: [AvailabilityService, QuoteService, BookingService, RetrieveService, CancelBookingService, SeatMapService, AncillariesService, PaymentService, SellAncillariesService, FareRulesService, PingService],
 })
 export class FlightModule {}

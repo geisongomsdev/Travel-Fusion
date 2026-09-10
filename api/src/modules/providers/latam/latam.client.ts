@@ -27,6 +27,15 @@ const OPERATION_TIMEOUTS: Record<string, { readMs: number; retries: number }> = 
   // Leituras: retry é seguro porque nada é gravado.
   SeatAvailability: { readMs: 45000, retries: 1 },
   ServiceList: { readMs: 45000, retries: 1 },
+  InstallmentOptions: { readMs: 30000, retries: 1 },
+  // 🔴 Pagamento é MUTAÇÃO: cobrar duas vezes é o pior erro possível aqui.
+  OrderChangePayment: { readMs: 90000, retries: 0 },
+  /**
+   * Comprar opcional é o mesmo caso: cobra cartão. E é ainda mais lento que o
+   * pagamento do voo — a companhia adiciona o serviço, cobra e devolve a ordem
+   * inteira relida, tudo na mesma resposta.
+   */
+  OrderChangeAncillaries: { readMs: 120000, retries: 0 },
   OrderReshop: { readMs: 45000, retries: 1 },
   OrderCancel: { readMs: 45000, retries: 0 },
 };

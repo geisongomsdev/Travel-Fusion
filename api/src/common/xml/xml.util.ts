@@ -1,4 +1,4 @@
-import { parseStringPromise } from 'xml2js';
+import { parseStringPromise, processors } from 'xml2js';
 
 /**
  * A forma REAL do que o xml2js devolve com `explicitArray:false` e
@@ -63,10 +63,29 @@ export function toXml(nodeName: string, value: unknown): string {
   if (Array.isArray(value)) return value.map((item) => toXml(nodeName, item)).join('');
   if (typeof value !== 'object') return `<${nodeName}>${escape(value)}</${nodeName}>`;
 
-  const inner = Object.entries(value as Record<string, unknown>)
+  /**
+   * Atributos e texto no mesmo nó, na convenção do fast-xml-parser: chave com
+   * `@_` vira atributo, `#text` vira o conteúdo. Existe porque a NDC tem nós
+   * como `<Amount CurCode="BRL">1023.18</Amount>` — sem isso, a moeda teria de
+   * ser montada como string solta no comando, e uma concatenação de XML no
+   * meio de um objeto é onde escape se perde.
+   */
+  const entries = Object.entries(value as Record<string, unknown>);
+
+  const attributes = entries
+    .filter(([key]) => key.startsWith('@_'))
+    .map(([key, attribute]) => ` ${key.slice(2)}="${escape(attribute)}"`)
+    .join('');
+
+  const text = (value as Record<string, unknown>)['#text'];
+  if (text !== undefined) return `<${nodeName}${attributes}>${escape(text)}</${nodeName}>`;
+
+  const inner = entries
+    .filter(([key]) => !key.startsWith('@_'))
     .map(([key, child]) => toXml(key, child))
     .join('');
-  return `<${nodeName}>${inner}</${nodeName}>`;
+
+  return `<${nodeName}${attributes}>${inner}</${nodeName}>`;
 }
 
 /** Nome do envelope obrigatório da Travelfusion, em request e response. */
@@ -100,6 +119,18 @@ export async function parseXml(xml: string): Promise<Record<string, any>> {
     explicitRoot: true,
     trim: true,
     ignoreAttrs: false,
+    /**
+     * 🔴 O prefixo de namespace é jogado fora na LEITURA.
+     *
+     * A NDC 24.1 responde `<ns2:IATA_OrderViewRS><ns2:Error>`, e a 19.2
+     * responde `<Error>` — mesma informação, chave diferente. Sem isto,
+     * `child(payload, 'Order')` só enxerga metade das mensagens e um erro do
+     * 24.1 chega como "conflito genérico" em vez do que realmente é.
+     *
+     * Na ESCRITA o prefixo continua importando e é montado à mão: o gateway
+     * recusa a mensagem 24.1 sem ele.
+     */
+    tagNameProcessors: [processors.stripPrefix],
   }) as Promise<Record<string, any>>;
 }
 

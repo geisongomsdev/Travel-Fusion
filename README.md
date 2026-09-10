@@ -201,6 +201,11 @@ chrome. Junto dele ficam os outros três componentes das páginas de operação 
 `FieldTable` (a tabela `Field Name / Type / Accepted Values / Required`), `Callout` (`### Advice` com
 o triângulo de `assets/warning-sign`, e `**Note:**`) e `Endpoint` (a faixa `### URL Endpoint`).
 
+O fluxo tem **seis passos** — buscar, escolher, revisar, passageiro, **pagar** e **extras**. Pagar é
+passo próprio porque é operação própria: a reserva nasce com prazo e sem pagamento. E os extras vêm
+DEPOIS de pagar, não antes, porque é só sobre a ordem emitida que a companhia vende assento e
+bagagem — a tela segue a regra da companhia em vez de oferecer o que não pode cumprir.
+
 **Uma decisão de exibição vale nota:** a LATAM devolve uma oferta por família tarifária, então o
 mesmo voo chega repetido — a busca GRU→SCL traz 422 tarifas para 94 voos. Listar cru viraria cinco
 cartões idênticos com preços diferentes. `ResultsStep` agrupa por voo e deixa as famílias como
@@ -226,7 +231,10 @@ Travelfusion, e o `/cancel-booking` respondia 501 mesmo com a LATAM, que cancela
 | `/ancillaries` | ✅ ServiceList, **pela oferta** | 501 — saem no `/quote`, em `requiredParameters` |
 | `/fare-rules` | 501 — devolve penalidade estruturada, não o texto da tarifa | ✅ vem no ProcessDetails |
 | `/ping` | ✅ o próprio OAuth2 prova a credencial | ✅ Login |
-| pagamento, emissão, e-ticket | 501 | 501 |
+| `/financing-options` | ✅ InstallmentOptions | 501 — não expõe parcelamento |
+| `/issue` | ✅ OrderChange com pagamento | 501 — `StartBooking` já cobra |
+| `/sell-ancillaries`, `/mark-seats` | ✅ OrderChange 24.1 (ver abaixo) | 501 — o extra entra como CSP no `/booking` |
+| e-ticket, `payment-options` | 501 | 501 |
 
 | | |
 |---|---|
@@ -234,38 +242,67 @@ Travelfusion, e o `/cancel-booking` respondia 501 mesmo com a LATAM, que cancela
 | LATAM | **funcionando ponta a ponta** contra o sandbox |
 
 O fluxo completo foi percorrido contra o sandbox real da LATAM: busca GRU→SCL (424 tarifas),
-tarifação, reserva (`LA9574345ABYG`, `OPENED`) e recuperação da ordem com passageiro, documento e
-nascimento de volta.
+tarifação, reserva (`OPENED`), **pagamento** (a ordem passa a `CLOSED`) e recuperação da ordem com
+passageiro, documento, nascimento e itinerário de volta.
 
-### O muro do cartão de teste
+### Pagar, parcelar e comprar extras
 
-Três coisas param no mesmo lugar, e é honesto agrupá-las: a LATAM só as libera sobre
-uma ordem **paga**, e as ordens criadas aqui ficam em `OPENED`. Pagar exige cartão de
-teste, que para POS ≠ `CL` precisa ser pedido ao time deles (`operations/order-create-payment.md`).
+Reservar e pagar são operações **separadas**, e são separadas porque a companhia as separa: o
+`OrderCreate` devolve uma ordem em `OPENED` com prazo (`PaymentTimeLimitDateTime`), e é o pagamento
+que fecha a passagem. Por isso `/booking` e `/issue` são rotas distintas, e não uma só.
 
-| O quê | Onde parou |
+| Rota | Mensagem | Estado |
+|---|---|---|
+| `/financing-options` | `InstallmentOptions` (v192) | ✅ até 8x sem juros, verificado |
+| `/issue` | `OrderChange` com pagamento (v192) | ✅ ordem vai de `OPENED` a `CLOSED`, verificado |
+| `/order-seat-map` | `SeatAvailability` **pela ordem** | ✅ 279 assentos com `SEAT_…`, verificado |
+| `/order-ancillaries` | `ServiceList` **pela ordem** | ✅ 5 bagagens com `BAG_…`, verificado |
+| `/sell-ancillaries`, `/mark-seats` | `OrderChange` 24.1 | ⚠️ payload aceito; o sandbox recusa a cobrança |
+
+🔴 **O valor a cobrar não vem do corpo.** O `/issue` pergunta o total à companhia pelo `OrderRetrieve`
+e cobra esse. Um `amount` no pedido é tratado como *declaração de expectativa*: se divergir, a
+resposta é `FARE_PRICE_CHANGED` e nada é cobrado. Aceitar o número de quem chama seria deixar o preço
+da cobrança ser decidido fora da companhia — e o erro só apareceria no extrato de quem comprou.
+
+🔴 **Dado de cartão não é logado, não é guardado e não volta na resposta.** O PAN existe em duas
+chamadas porque a operadora precisa dele (parcelas e cobrança), e morre com a requisição. O que fica
+no log é o `correlationId` e o localizador.
+
+#### Dois catálogos de assento, e a diferença importa
+
+O mesmo assento tem **dois identificadores**, conforme por onde se pergunta:
+
+| Endereçado por | Rota | `offerItemId` | Serve para |
+|---|---|---|---|
+| Oferta (antes de reservar) | `/seat-map`, `/ancillaries` | `SEI\|…` | escolher; morre na emissão |
+| Ordem (depois de emitida) | `/order-seat-map`, `/order-ancillaries` | `SEAT_…` / `BAG_…` | **comprar** |
+
+Trocar um pelo outro é o que fazia a LATAM responder `INVALID_OFFER_TYPES: Mixed type offers are not
+supported`. O prefixo (`SEAT_`/`BAG_`) é o que roteia o pedido para o fluxo de opcionais; um id fora
+desse formato cai no fluxo de **troca de voo**, que é outra coisa sobre a mesma reserva. Por isso o
+`/sell-ancillaries` recusa antes da rede um id que não esteja no catálogo daquela reserva.
+
+#### O que o 24.1 exige e a doc não diz
+
+O `OrderChange` de opcionais é outra mensagem, com outro envelope (EASD, `easd:` nos filhos do topo)
+e outra versão. Três coisas custaram tentativa e erro:
+
+| Sintoma | Causa |
 |---|---|
-| `/cancel-booking` | Chega ao provedor e recebe `400107002 Invalid order current status` |
-| **Comprar** o assento | Ver abaixo |
-| Emissão | Não existe como operação separada na LATAM — quem emite é o pagamento |
+| `911 The content of element 'Order' is not complete` | `ServiceList` pela ordem exige `OrderItem/GrandTotalAmount` |
+| `400300011 Required field is missing: AugmentationPoint` | o CPF do titular vai na **raiz** da mensagem, como `easd:AugmentationPoint`, antes de tudo — testei dentro do `PaymentCard` (onde a doc sugere), do `PaymentMethod`, do `PaymentProcessingDetails`, no fim do `Request` e na raiz sem prefixo: as cinco dão o mesmo erro |
+| `400300012 IdentityDocTypeCode value must be I for Brazil` | a doc manda `CPF`; o gateway quer `I` |
 
-**Sobre comprar o assento**, o caminho foi sondado até o fim e os três erros dizem a
-mesma coisa por ângulos diferentes:
+**Onde parou.** Com isso o pedido passa em toda a validação: com um valor errado a companhia responde
+`400300005 Payment amount does not match order total`, e com o valor certo ela responde
+`409300032 Unsuccessful authorize` — a autorização da cobrança do opcional. O mesmo acontece pagando
+por BSP (`PaymentTypeCode CA`), que é isento das regras de cartão do Brasil. Ou seja: **o payload está
+correto e o sandbox não autoriza cobranças de opcional**. O contrato mapeia isso para
+`PAYMENT_DECLINED` (409) — recusa da operadora não é conflito de estado nem erro de integração, e
+repetir com o mesmo cartão dá no mesmo.
 
-1. `SelectedOfferItem` do assento junto com o do voo no `OrderCreate` →
-   `400112165 SelectedBundleServices/SelectedServiceRefID is required`
-2. Com o `SelectedServiceRefID` do `ALaCarteOfferItem` →
-   `400112102 Invalid SelectedServiceRefID`
-3. Seguindo o fluxo publicado, com o assento já no `OfferPrice` →
-   `INVALID_OFFER_TYPES: Mixed type offers are not supported`
-
-Ou seja: a oferta de voo e a à-la-carte **não se misturam na mesma mensagem**. O assento
-entra pelo `OrderChange` da **v241** (`/ndc/v241/order/change`), que exige
-`PaymentFunctions` e ordem já emitida — o mesmo muro.
-
-Por isso `/seat-map` e `/ancillaries` são **leitura**: mostram o que existe e por quanto,
-com o par opaco (`offerItemId` + `serviceId`) preservado para quem for comprar depois.
-Escolher na tela não grava na companhia, e a tela não diz que grava.
+O voo em si **é pago** pelo mesmo cartão de teste (`4000000000002701`, CVV `737`, `03/30`, tabela em
+`operations/order-create-payment.md`): o `/issue` fecha a ordem em `CLOSED`.
 
 ### `options.refundable` e `options.class`
 

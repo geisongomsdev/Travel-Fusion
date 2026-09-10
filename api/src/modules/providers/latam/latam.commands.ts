@@ -26,12 +26,29 @@ export const PATHS = {
   orderReshop: process.env.LATAM_PATH_ORDER_RESHOP ?? '/ndc/v192/order/reshop',
   seatAvailability: process.env.LATAM_PATH_SEATS ?? '/ndc/v192/seats/availability',
   serviceList: process.env.LATAM_PATH_SERVICES ?? '/ndc/v192/services/list',
+  orderChangePayment: process.env.LATAM_PATH_PAY ?? '/ndc/v192/order/change/payment',
+  installments: process.env.LATAM_PATH_INSTALLMENTS ?? '/ndc/v192/installments/options',
+  /** 🔴 v241, não v192: comprar opcional sobre ordem emitida só existe no 24.1. */
+  orderChange241: process.env.LATAM_PATH_ORDER_CHANGE_241 ?? '/ndc/v241/order/change',
 };
 
 /** Envelope NDC: cada mensagem tem o SEU namespace, derivado do nome. */
 function envelope(message: string, inner: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>`
     + `<${message} xmlns="${NS}/${message}">${inner}</${message}>`;
+}
+
+const EASD_MSG = 'http://www.iata.org/IATA/2015/EASD/00/IATA_OffersAndOrdersMessage';
+const EASD_COMMON = 'http://www.iata.org/IATA/2015/EASD/00/IATA_OffersAndOrdersCommonTypes';
+
+/**
+ * Envelope do 24.1. NÃO é o `envelope()` acima com outra versão: o EASD usa
+ * DOIS namespaces — o da mensagem, prefixado `easd:` nos filhos diretos, e o
+ * dos tipos comuns, que é o default e cobre todo o resto da árvore.
+ */
+function easdEnvelope(message: string, inner: string): string {
+  return '<?xml version="1.0" encoding="UTF-8"?>'
+    + `<easd:${message} xmlns:easd="${EASD_MSG}" xmlns="${EASD_COMMON}">${inner}</easd:${message}>`;
 }
 
 /**
@@ -81,6 +98,48 @@ export function buildPaxList(passengers: AirShoppingRequest['passengers']): Arra
 const CABIN_CODE: Record<string, string> = {
   economy: 'Y', premium_economy: 'W', business: 'C', first: 'F',
 };
+
+/**
+ * O catálogo de opcionais é endereçável de dois jeitos, e a diferença NÃO é
+ * cosmética — muda o id que volta:
+ *
+ *   • por OFERTA (antes de reservar) → `OfferItemID` no formato `SEI|...`,
+ *     que só serve para o OrderCreate v192;
+ *   • por ORDEM (depois de emitida)  → `OfferItemID` no formato `SEAT_<hash>`
+ *     / `BAG_<hash>`, os ÚNICOS que o OrderChange 24.1 aceita.
+ *
+ * Comprar assento sobre uma reserva já emitida exige o segundo. Foi por isso
+ * que a tentativa pela oferta batia em `INVALID_OFFER_TYPES`.
+ */
+export type CatalogTarget = { offerId: string } | { orderId: string };
+
+function catalogRequest(
+  target: CatalogTarget,
+  paxIds: string[],
+  context: RequestContext,
+  /**
+   * 🔴 O ServiceList por ordem exige `OrderItem` dentro de `Order` — sem ele a
+   * LATAM responde `911 The content of element 'Order' is not complete`. O
+   * `GrandTotalAmount 0` é o que a própria amostra manda: aqui não se está
+   * cotando nada, só pedindo o catálogo. O SeatAvailability não pede isso.
+   */
+  orderItem = false,
+): string {
+  const pax = paxIds.length > 0 ? paxIds : ['ADT_1'];
+  const core = 'offerId' in target
+    ? toXml('CoreRequest', { Offer: { OfferID: target.offerId } })
+    : toXml('CoreRequest', {
+        Order: {
+          OrderID: target.orderId,
+          OrderItem: orderItem ? { GrandTotalAmount: 0 } : undefined,
+        },
+      });
+
+  return partyAndPos(context)
+    + `<Request>${core}`
+    + toXml('Pax', pax.map((paxId) => ({ PaxID: paxId, PTC: paxId.split('_')[0] })))
+    + '</Request>';
+}
 
 @Injectable()
 export class LatamCommands {
@@ -223,18 +282,11 @@ export class LatamCommands {
    * sobre a reserva, e essa divergência está documentada no README — aqui o
    * `identifier` da oferta faz o papel do localizador.
    */
-  async seatAvailability(offerId: string, paxIds: string[], context: RequestContext): Promise<LatamResult> {
-    const pax = paxIds.length > 0 ? paxIds : ['ADT_1'];
-
-    const inner = partyAndPos(context)
-      + `<Request>${toXml('CoreRequest', { Offer: { OfferID: offerId } })}`
-      + toXml('Pax', pax.map((paxId) => ({ PaxID: paxId, PTC: paxId.split('_')[0] })))
-      + '</Request>';
-
+  async seatAvailability(target: CatalogTarget, paxIds: string[], context: RequestContext): Promise<LatamResult> {
     return this.client.send(
       'SeatAvailability',
       PATHS.seatAvailability,
-      envelope('IATA_SeatAvailabilityRQ', inner),
+      envelope('IATA_SeatAvailabilityRQ', catalogRequest(target, paxIds, context)),
       context,
     );
   }
@@ -242,19 +294,15 @@ export class LatamCommands {
   /**
    * ServiceList = os opcionais vendidos à parte (bagagem extra, etc).
    *
-   * Mesma forma do SeatAvailability, e endereçado do mesmo jeito: pela OFERTA.
-   * O fluxo publicado é AirShopping → SeatAvailability → ServiceList →
-   * OfferPrice → OrderCreate.
+   * Mesma forma e mesmo endereçamento do SeatAvailability.
    */
-  async serviceList(offerId: string, paxIds: string[], context: RequestContext): Promise<LatamResult> {
-    const pax = paxIds.length > 0 ? paxIds : ['ADT_1'];
-
-    const inner = partyAndPos(context)
-      + `<Request>${toXml('CoreRequest', { Offer: { OfferID: offerId } })}`
-      + toXml('Pax', pax.map((paxId) => ({ PaxID: paxId, PTC: paxId.split('_')[0] })))
-      + '</Request>';
-
-    return this.client.send('ServiceList', PATHS.serviceList, envelope('IATA_ServiceListRQ', inner), context);
+  async serviceList(target: CatalogTarget, paxIds: string[], context: RequestContext): Promise<LatamResult> {
+    return this.client.send(
+      'ServiceList',
+      PATHS.serviceList,
+      envelope('IATA_ServiceListRQ', catalogRequest(target, paxIds, context, true)),
+      context,
+    );
   }
 
   /**
@@ -291,5 +339,259 @@ export class LatamCommands {
       });
 
     return this.client.send('OrderCancel', PATHS.orderCancel, envelope('IATA_OrderCancelRQ', inner), context);
+  }
+
+  /**
+   * InstallmentOptions = as opções de parcelamento do cartão para uma ordem.
+   *
+   * 🔴 Esta mensagem NÃO é NDC: a raiz é `<InstallmentOptionsRQ>` sem
+   * namespace nenhum, então ela não pode usar o `envelope()`. Foi assim que a
+   * LATAM publicou, e forçá-la no molde das outras quebraria o parse do lado
+   * deles.
+   *
+   * 🔴 O `Pan` é o NÚMERO DO CARTÃO. Ele existe aqui porque a operadora precisa
+   * dele para dizer as parcelas — mas não é logado, não é guardado e não sai
+   * desta chamada. O mesmo vale para tudo em `PaymentCard` mais abaixo.
+   */
+  async installmentOptions(pan: string, orderId: string, context: RequestContext): Promise<LatamResult> {
+    const body = '<?xml version="1.0" encoding="UTF-8"?>'
+      + '<InstallmentOptionsRQ>'
+      + toXml('Party', {
+        Sender: {
+          TravelAgency: {
+            AgencyID: env.latam.agencyId || undefined,
+            IATA_Number: env.latam.agencyIata || undefined,
+            Name: env.latam.agencyName,
+            TravelAgent: env.latam.travelAgentId
+              ? { TravelAgentID: env.latam.travelAgentId }
+              : undefined,
+          },
+        },
+      })
+      + toXml('Pan', pan)
+      + toXml('OrderId', orderId)
+      // PAYLATER = ordem já criada, pagamento em separado. É o nosso caso.
+      + toXml('ExecutionFlow', 'PAYLATER')
+      + '</InstallmentOptionsRQ>';
+
+    return this.client.send('InstallmentOptions', PATHS.installments, body, context);
+  }
+
+  /**
+   * OrderChange com pagamento = PAGAR uma ordem que já existe.
+   *
+   * 🔴 Não confundir com `/order/create/payment`, que CRIA e paga de uma vez.
+   * O contrato separa reservar de emitir, e é este endpoint que casa com essa
+   * separação: o `/booking` segura o assento, o `/issue` cobra.
+   *
+   * 🔴 Mutação não idempotente e sem retry — cobrar duas vezes é o pior erro
+   * possível aqui. Se a resposta se perder, o caminho é o OrderRetrieve.
+   *
+   * @param installmentId opcional; vem do `InstallmentOptions` e vai no `TrxID`.
+   */
+  async orderChangePayment(
+    orderId: string,
+    amount: { total: number; currency: string },
+    card: {
+      brand: string;
+      holder: string;
+      number: string;
+      securityCode: string;
+      /** `MMAA`, como a LATAM espera — quem converte é o caso de uso. */
+      expiration: string;
+    },
+    billing: { email: string; countryCode: string; postalCode: string; street: string },
+    payer: { firstName: string; lastName: string; dateOfBirth: string; documentNumber: string },
+    installmentId: string | null,
+    context: RequestContext,
+  ): Promise<LatamResult> {
+    const inner = toXml('MessageDoc', { RefVersionNumber: '1.0' })
+      + toXml('Party', {
+        Sender: {
+          TravelAgency: {
+            AgencyID: env.latam.agencyId || undefined,
+            ContactInfoRefID: 'AGENCY_1_CNT',
+            IATA_Number: env.latam.agencyIata || undefined,
+            Name: env.latam.agencyName,
+            TravelAgent: env.latam.travelAgentId
+              ? { TravelAgentID: env.latam.travelAgentId }
+              : undefined,
+          },
+        },
+      })
+      + toXml('Request', {
+        DataLists: {
+          /**
+           * 🔴 `ContactPurposeText: BILLING` e o `PostalAddress` completo são
+           * obrigatórios no pagamento — não são os mesmos contatos do
+           * OrderCreate, que descrevem o passageiro. Aqui é quem paga.
+           */
+          ContactInfoList: {
+            ContactInfo: {
+              ContactInfoID: 'AGENCY_1_CNT',
+              ContactPurposeText: 'BILLING',
+              EmailAddress: { EmailAddressText: billing.email },
+              PostalAddress: {
+                CountryCode: billing.countryCode,
+                PostalCode: billing.postalCode,
+                StreetText: billing.street,
+              },
+            },
+          },
+        },
+        Order: { OrderID: orderId, OwnerCode: OWNER_CODE },
+        PaymentFunctions: {
+          PaymentProcessingDetails: {
+            Amount: { '@_CurCode': amount.currency, '#text': amount.total },
+            ContactInfoRefID: 'AGENCY_1_CNT',
+            /**
+             * 🔴 `Payer` é OBRIGATÓRIO — sem ele a LATAM devolve
+             * `400113007 PaymentProcessingDetails.Payer is mandatory`. E não é
+             * o passageiro: é QUEM PAGA, e no Brasil o `IndividualID` é o CPF
+             * do titular. Os dois coincidem no caso comum e divergem quando
+             * alguém compra para outra pessoa.
+             */
+            Payer: {
+              Individual: {
+                Birthdate: payer.dateOfBirth,
+                GivenName: payer.firstName,
+                IndividualID: payer.documentNumber,
+                Surname: payer.lastName,
+              },
+            },
+            PaymentMethod: {
+              PaymentCard: {
+                CardBrandCode: card.brand,
+                CardHolderName: card.holder,
+                CardNumber: card.number,
+                CardSecurityCode: card.securityCode,
+                ExpirationDate: card.expiration,
+              },
+            },
+            // O id da parcela escolhida viaja no TrxID — é o que a doc manda.
+            PaymentTrx: installmentId ? { TrxID: installmentId } : undefined,
+            TypeCode: 'Credit Card',
+          },
+        },
+      });
+
+    return this.client.send(
+      'OrderChangePayment',
+      PATHS.orderChangePayment,
+      envelope('IATA_OrderChangeRQ', inner),
+      context,
+    );
+  }
+
+  /**
+   * OrderChange 24.1 = COMPRAR assento e/ou bagagem numa ordem já emitida.
+   *
+   * 🔴 Por que não dá para fazer isso no v192: lá o opcional entra junto com a
+   * reserva, e tentar adicioná-lo depois devolve `INVALID_OFFER_TYPES: Mixed
+   * type offers are not supported`. A compra pós-emissão é uma capacidade
+   * separada, com envelope, versão e catálogo próprios.
+   *
+   * 🔴 Os ids TÊM que vir do catálogo endereçado pela ORDEM (`SEAT_`/`BAG_`).
+   * É o prefixo que faz a LATAM rotear para este fluxo: um id fora desse
+   * formato cai no fluxo de troca de voo, que é outra coisa inteiramente.
+   *
+   * 🔴 Mutação não idempotente: cobra o cartão. Sem retry.
+   */
+  async orderChangeAddAncillaries(
+    orderId: string,
+    items: Array<{
+      offerItemId: string;
+      paxId: string;
+      /** Só para `SEAT_`: a LATAM exige a poltrona explícita, além do id. */
+      seat?: { row: string; column: string } | null;
+    }>,
+    amount: { total: number; currency: string },
+    payment:
+      | { method: 'cash' }
+      | {
+          method: 'card';
+          card: { brand: string; holder: string; number: string; securityCode: string; expiration: string };
+          payer: { firstName: string; lastName: string; dateOfBirth: string; documentNumber: string };
+        },
+    context: RequestContext,
+  ): Promise<LatamResult> {
+    const distribution = toXml('easd:DistributionChain', {
+      DistributionChainLink: {
+        Ordinal: 1,
+        OrgRole: 'Seller',
+        SalesAgent: env.latam.travelAgentId ? { SalesAgentID: env.latam.travelAgentId } : undefined,
+        ParticipatingOrg: { OrgID: env.latam.agencyIata || env.latam.agencyId },
+      },
+    });
+
+    const paymentMethod = payment.method === 'cash'
+      ? { SettlementPlan: { PaymentTypeCode: 'CA' } }
+      : {
+          PaymentCard: {
+            CardBrandCode: payment.card.brand,
+            CardHolderName: payment.card.holder,
+            CardNumber: payment.card.number,
+            CardSecurityCode: payment.card.securityCode,
+            ExpirationDate: payment.card.expiration,
+          },
+        };
+
+    /**
+     * 🔴 O CPF do titular vai na RAIZ da mensagem, prefixado `easd:`, e antes
+     * de tudo. Não é detalhe de estilo: a LATAM procura exatamente aí. Provei
+     * uma a uma — dentro do `PaymentCard` (que é onde a doc sugere), dentro do
+     * `PaymentMethod`, dentro do `PaymentProcessingDetails`, no fim do
+     * `Request` e na raiz sem prefixo: todas devolvem
+     * `400300011 Required field is missing in the request: AugmentationPoint`.
+     *
+     * 🔴 E o tipo do documento é `I`, não `CPF`: a doc diz `CPF` e o gateway
+     * responde `400300012 IdentityDocTypeCode value must be I for Brazil`.
+     *
+     * Pagamento por BSP é isento — daí o bloco só existir no caminho do cartão.
+     */
+    const cardholder = payment.method === 'card'
+      ? toXml('easd:AugmentationPoint', {
+          CardholderIdentityDoc: {
+            Birthdate: payment.payer.dateOfBirth,
+            IdentityDocID: payment.payer.documentNumber,
+            IdentityDocTypeCode: 'I',
+          },
+        })
+      : '';
+
+    const inner = cardholder
+      + distribution
+      + toXml('easd:PayloadAttributes', { VersionNumber: '24.1' })
+      + toXml('easd:Request', {
+        Order: { OrderID: orderId, OwnerCode: OWNER_CODE },
+        ChangeOrderChoice: {
+          AcceptSelectedQuotedOfferList: {
+            SelectedPricedOffer: {
+              OfferRefID: orderId,
+              OwnerCode: OWNER_CODE,
+              SelectedOfferItem: items.map((item) => ({
+                OfferItemRefID: item.offerItemId,
+                PaxRefID: item.paxId,
+                SelectedSeat: item.seat
+                  ? { ColumnID: item.seat.column, SeatRowNumber: item.seat.row }
+                  : undefined,
+              })),
+            },
+          },
+        },
+        PaymentFunctions: {
+          PaymentProcessingDetails: {
+            Amount: { '@_CurCode': amount.currency, '#text': amount.total },
+            PaymentMethod: paymentMethod,
+          },
+        },
+      });
+
+    return this.client.send(
+      'OrderChangeAncillaries',
+      PATHS.orderChange241,
+      easdEnvelope('IATA_OrderChangeRQ', inner),
+      context,
+    );
   }
 }

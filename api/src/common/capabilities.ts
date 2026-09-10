@@ -68,14 +68,20 @@ export const LATAM_CAPABILITIES: Record<FlightOperation, boolean> = {
 
   seatMap:          true,   // /seats/availability, pela oferta
   ancillaries:      true,   // /services/list, pela oferta
+  financingOptions: true,   // /installments/options
+  issue:            true,   // /order/change/payment — a ordem nasce sem pagar
+
+  /**
+   * Comprar assento/bagagem sobre reserva EMITIDA — /ndc/v241/order/change.
+   * Marcar e comprar sao a mesma operacao aqui: a LATAM cobra o assento no
+   * mesmo pedido em que o confirma, e nao existe reservar sem pagar.
+   */
+  sellAncillaries:  true,
+  markSeats:        true,
 
   // Existem na NDC, ainda nao integrados aqui — divida nossa, nao ausencia deles.
-  markSeats:        false,
   removeSeats:      false,
-  sellAncillaries:  false,
   paymentOptions:   false,
-  financingOptions: false,
-  issue:            false,
   retrieveEticket:  false,
   cancelEticket:    false,
 };

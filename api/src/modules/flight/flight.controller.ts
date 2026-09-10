@@ -8,7 +8,10 @@ import { Operation, RawResponse } from '../../common/interceptors/envelope.inter
 import { notSupported } from '../../common/errors/app-error';
 import { RequestContext } from '../providers/provider.types';
 import { AvailabilityDto } from './dto/availability.dto';
-import { CancelBookingDto, CreateBookingDto, FareRulesDto, QuoteDto, RetrieveDto, SeatMapDto } from './dto/booking.dto';
+import {
+  CancelBookingDto, CreateBookingDto, FareRulesDto, FinancingOptionsDto, IssueDto,
+  OrderCatalogDto, QuoteDto, RetrieveDto, SeatMapDto, SellAncillariesDto,
+} from './dto/booking.dto';
 import { PingDto } from './dto/ping.dto';
 import { AvailabilityService } from './use-cases/availability.service';
 import { BookingService } from './use-cases/booking.service';
@@ -19,6 +22,8 @@ import { RetrieveService } from './use-cases/retrieve.service';
 import { CancelBookingService } from './use-cases/cancel-booking.service';
 import { SeatMapService } from './use-cases/seat-map.service';
 import { AncillariesService } from './use-cases/ancillaries.service';
+import { PaymentService } from './use-cases/payment.service';
+import { SellAncillariesService } from './use-cases/sell-ancillaries.service';
 import { ERROR_RESPONSES, NOT_SUPPORTED_ROUTES } from './flight.swagger';
 
 type FlightRequest = Request & { correlationId?: string };
@@ -41,6 +46,8 @@ export class FlightController {
     private readonly cancel: CancelBookingService,
     private readonly seats: SeatMapService,
     private readonly extras: AncillariesService,
+    private readonly payment: PaymentService,
+    private readonly postSale: SellAncillariesService,
     private readonly fareRules: FareRulesService,
     private readonly pingProbe: PingService,
   ) {}
@@ -249,11 +256,64 @@ export class FlightController {
     return this.seats.execute(dto, contextOf(request));
   }
 
+  /**
+   * O mapa de assentos de uma reserva JÁ EMITIDA — o catálogo de onde saem os
+   * identificadores que o /sell-ancillaries aceita.
+   */
+  @Post('order-seat-map')
+  @Capability('seatMap')
+  @Operation('seatMap')
+  @ApiTags('Assentos')
+  @ApiOperation({
+    summary: 'Mapa de assentos da reserva emitida',
+    description: [
+      'Read-only. Endereçado pelo LOCALIZADOR, ao contrário do /seat-map, que responde pela oferta.',
+      '',
+      '🔴 **Não é o mesmo catálogo.** Os `offerItemId` daqui (`SEAT_…`) são os únicos que o',
+      '/sell-ancillaries aceita; os do /seat-map (`SEI|…`) morrem na emissão. Usar um no lugar',
+      'do outro faz a companhia recusar com `INVALID_OFFER_TYPES`.',
+    ].join('\n'),
+  })
+  @ApiBody({ type: OrderCatalogDto })
+  async orderSeatMap(@Body() dto: OrderCatalogDto, @Req() request: FlightRequest) {
+    return this.postSale.seatMap(dto, contextOf(request));
+  }
+
+  /** Idem, para bagagem e demais opcionais. */
+  @Post('order-ancillaries')
+  @Capability('ancillaries')
+  @Operation('ancillaries')
+  @ApiTags('Assentos')
+  @ApiOperation({
+    summary: 'Opcionais da reserva emitida',
+    description: 'Read-only. Mesmo par de catálogos do /order-seat-map, endereçado pelo localizador.',
+  })
+  @ApiBody({ type: OrderCatalogDto })
+  async orderAncillaries(@Body() dto: OrderCatalogDto, @Req() request: FlightRequest) {
+    return this.postSale.ancillaries(dto, contextOf(request));
+  }
+
+  /**
+   * 🔴 Marcar assento e comprar assento são a MESMA operação na LATAM: o
+   * assento é confirmado no mesmo pedido em que é cobrado, e não existe
+   * segurá-lo sem pagar. Esta rota existe porque o contrato canônico a prevê,
+   * e delega para o /sell-ancillaries em vez de fingir uma etapa que não há.
+   */
   @Post('mark-seats')
   @Capability('markSeats')
-  @ApiTags('Não suportado pelo provedor')
-  @ApiOperation(NOT_SUPPORTED_ROUTES.markSeats)
-  markSeats(): never { throw notSupported('markSeats'); }
+  @Operation('sellAncillaries')
+  @ApiTags('Assentos')
+  @ApiOperation({
+    summary: 'Marcar assentos na reserva emitida',
+    description: [
+      '🔴 **Cobra o cartão.** Não é idempotente e não tem retry: na LATAM marcar e pagar o',
+      'assento é um pedido só. Mesmo corpo e mesma resposta do /sell-ancillaries.',
+    ].join('\n'),
+  })
+  @ApiBody({ type: SellAncillariesDto })
+  async markSeats(@Body() dto: SellAncillariesDto, @Req() request: FlightRequest) {
+    return this.postSale.execute(dto, contextOf(request));
+  }
 
   /** DELETE com corpo — é assim no contrato. */
   @Delete('remove-seats')
@@ -282,9 +342,26 @@ export class FlightController {
 
   @Post('sell-ancillaries')
   @Capability('sellAncillaries')
-  @ApiTags('Não suportado pelo provedor')
-  @ApiOperation(NOT_SUPPORTED_ROUTES.sellAncillaries)
-  sellAncillaries(): never { throw notSupported('sellAncillaries'); }
+  @Operation('sellAncillaries')
+  @ApiTags('Assentos')
+  @ApiOperation({
+    summary: 'Comprar assento e/ou bagagem na reserva emitida',
+    description: [
+      '🔴 **Cobra o cartão. Não é idempotente e não tem retry.** Se a resposta se perder, o',
+      'caminho é o /retrieve — nunca repetir o pedido.',
+      '',
+      'O valor cobrado NÃO vem do corpo: é somado a partir do catálogo da própria reserva. Quem',
+      'chama escolhe os itens; o preço é da companhia.',
+      '',
+      'Exige reserva EMITIDA. Numa reserva ainda não paga, pague primeiro pelo /issue.',
+      '',
+      'Cartão é dispensável só quando os opcionais escolhidos somam zero — assento cortesia.',
+    ].join('\n'),
+  })
+  @ApiBody({ type: SellAncillariesDto })
+  async sellAncillaries(@Body() dto: SellAncillariesDto, @Req() request: FlightRequest) {
+    return this.postSale.execute(dto, contextOf(request));
+  }
 
   @Post('payment-options')
   @Capability('paymentOptions')
@@ -294,15 +371,51 @@ export class FlightController {
 
   @Post('financing-options')
   @Capability('financingOptions')
-  @ApiTags('Não suportado pelo provedor')
-  @ApiOperation(NOT_SUPPORTED_ROUTES.financingOptions)
-  financingOptions(): never { throw notSupported('financingOptions'); }
+  @Operation('financingOptions')
+  @ApiTags('Pagamento')
+  @ApiOperation({
+    summary: 'Parcelas que o cartão aceita',
+    description: [
+      'Read-only: consulta a operadora, não cobra nada.',
+      '',
+      '🔴 O `card` é o **número do cartão**. Ele existe no corpo porque a operadora precisa dele',
+      'para calcular as parcelas — e **não é logado, não é guardado e não volta na resposta**.',
+      '',
+      'Lista vazia é resposta válida: o cartão pode não aceitar parcelamento.',
+    ].join('\n'),
+  })
+  @ApiBody({ type: FinancingOptionsDto })
+  async financingOptions(@Body() dto: FinancingOptionsDto, @Req() request: FlightRequest) {
+    return this.payment.financingOptions(dto, contextOf(request));
+  }
 
   @Post('issue')
   @Capability('issue')
-  @ApiTags('Não suportado pelo provedor')
-  @ApiOperation(NOT_SUPPORTED_ROUTES.issue)
-  issue(): never { throw notSupported('issue'); }
+  @Operation('issue')
+  @ApiTags('Pagamento')
+  @ApiOperation({
+    summary: 'Pagar a reserva',
+    description: [
+      'Mapeia para `OrderChange` com `PaymentFunctions` — paga uma ordem que já existe.',
+      'Não confundir com `/order/create/payment`, que cria e paga de uma vez.',
+      '',
+      '🔴 **Mutação não idempotente e sem retry.** Cobrar duas vezes é o pior erro possível.',
+      'Se a resposta se perder, o caminho é o `/retrieve` — nunca pagar de novo.',
+      '',
+      '🔴 O valor cobrado é **perguntado à companhia**, não aceito do corpo. `amount` é opcional',
+      'e serve como declaração do que quem chama espera: se divergir, a cobrança não acontece',
+      'e a resposta é `FARE_PRICE_CHANGED`.',
+      '',
+      '`issued: false` com `status: "pending"` significa aceito e ainda não fechado — consulte',
+      'o `/retrieve`, não repita o pagamento.',
+      '',
+      'A Travelfusion responde **501**: lá o `StartBooking` já cobra, e não há o que emitir depois.',
+    ].join('\n'),
+  })
+  @ApiBody({ type: IssueDto })
+  async issue(@Body() dto: IssueDto, @Req() request: FlightRequest) {
+    return this.payment.issue(dto, contextOf(request));
+  }
 
   @Post('retrieve-eticket')
   @Capability('retrieveEticket')

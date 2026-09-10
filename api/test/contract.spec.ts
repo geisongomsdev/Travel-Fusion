@@ -46,8 +46,15 @@ describe('catálogo de erro', () => {
     expect(lookupError('CAPABILITY_NOT_SUPPORTED').status).toBe(501);
   });
 
-  it('tem os 18 códigos do contrato', () => {
-    expect(ERROR_CODES).toHaveLength(18);
+  it('tem os 18 códigos do contrato mais o de pagamento recusado', () => {
+    /**
+     * 🔴 `PAYMENT_DECLINED` é o 19º, e é ADIÇÃO, não substituição: recusa da
+     * operadora não é conflito de estado nem erro de integração. Nada foi
+     * cobrado, e repetir com o mesmo cartão dá no mesmo — quem consome precisa
+     * saber disso para pedir outro meio de pagamento em vez de retentar.
+     */
+    expect(ERROR_CODES).toHaveLength(19);
+    expect(lookupError('PAYMENT_DECLINED').status).toBe(409);
   });
 });
 

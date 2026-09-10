@@ -53,6 +53,10 @@ export class TravelfusionProvider implements FlightProvider {
     seatMap: false,
     // Os opcionais da Travelfusion saem no /quote, como requiredParameters.
     ancillaries: false,
+    // O StartBooking ja cobra: nao ha o que financiar nem o que emitir depois.
+    financingOptions: false,
+    issue: false,
+    sellAncillaries: false,
   };
 
   constructor(private readonly commands: TravelfusionCommands) {}
@@ -211,6 +215,10 @@ export class TravelfusionProvider implements FlightProvider {
         dateOfBirth: text(traveller?.DateOfBirth),
         type: text(traveller?.Type),
       })),
+      // 🔴 O CheckBooking NAO devolve itinerario. `[]` aqui e limite do
+      // provedor, nao lacuna nossa — e o contrato distingue as duas coisas.
+      segments: [],
+      total: null,
     };
   }
 
