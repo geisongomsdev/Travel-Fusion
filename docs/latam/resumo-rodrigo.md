@@ -8,4 +8,4 @@ A compra de assento/bagagem pós-emissão exigiu o `OrderChange` 24.1 (outro env
 
 Boa parte do trabalho foi descobrir o que a doc da LATAM não conta — casing de rota, ordem alfabética obrigatória dos elementos, campos exigidos pelo XSD e a posição real do CPF do titular — e cada descoberta virou nota no README e teste no duble.
 
-Tem front completo (React + o design system da Pass) percorrendo os cinco passos, com bilhete imprimível, 67 testes verdes, e o detalhamento em `docs/fluxo.md`.
+Tem front completo (React + o design system da Pass) percorrendo os cinco passos, com bilhete imprimível, 67 testes verdes. O fluxo explicado sem código está em `docs/latam/fluxo.md`, e a referência de cada rota em `docs/latam/rotas.md`.
