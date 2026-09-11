@@ -3,6 +3,10 @@
 Este documento é para **qualquer pessoa** — não precisa saber programar. A ideia é que, depois de
 ler, você consiga explicar para outra pessoa o que acontece em cada etapa e por quê.
 
+> Quer o detalhe técnico de cada etapa — o que a tela envia, o que a API faz por dentro, o que volta e
+> que erros podem aparecer? Veja [`rotas.md`](rotas.md). Vai apresentar? Veja
+> [`apresentacao.md`](apresentacao.md).
+
 ---
 
 ## O problema, em uma frase
@@ -142,8 +146,11 @@ Quando o pagamento passa, a reserva muda de estado — de "aberta" para "fechada
 comprada.
 
 **Sobre o cartão:** o número, o código de segurança e a validade **não são gravados em lugar
-nenhum**, não aparecem em nenhum registro do sistema e não voltam na resposta. Eles existem durante
-a chamada e somem com ela.
+nenhum** e não voltam na resposta. Eles existem durante a chamada e somem com ela.
+
+Um cuidado ainda pendente: se a conexão com a companhia cair no meio do pagamento, o registro técnico
+desse erro pode incluir o pedido inteiro, com os dados do cartão. Precisa ser corrigido antes de uso
+com cartão de verdade.
 
 ---
 

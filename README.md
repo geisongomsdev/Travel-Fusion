@@ -1,9 +1,25 @@
 # Pass Flight API
 
-Uma API que traduz **múltiplos provedores de passagem aérea** para o contrato canônico da Pass —
+Uma API que traduz **provedores de passagem aérea** para o contrato canônico da Pass —
 17 rotas REST/JSON, com `/availability` em `text/event-stream`.
 
-Hoje fala com dois provedores, por caminhos completamente diferentes:
+🎯 **O foco atual é a LATAM NDC**, que roda ponta a ponta contra o sandbox real. A Travelfusion está
+arquivada: o código continua atrás da mesma interface, mas o provedor está bloqueado por liberação de
+IP ([`docs/travelfusion/`](docs/travelfusion/README.md)).
+
+## Documentação
+
+| Você quer… | Leia |
+|---|---|
+| cada rota em detalhe: pedido, o que acontece por dentro, resposta, erros | [`docs/latam/rotas.md`](docs/latam/rotas.md) |
+| o fluxo explicado para quem não programa | [`docs/latam/fluxo.md`](docs/latam/fluxo.md) |
+| apresentar o projeto, com roteiro e perguntas prováveis | [`docs/latam/apresentacao.md`](docs/latam/apresentacao.md) |
+| a stack e a organização do código | [`docs/stack.md`](docs/stack.md) |
+| o índice completo | [`docs/README.md`](docs/README.md) |
+
+## Dois provedores, por caminhos diferentes
+
+A fronteira foi desenhada com os dois, e é por isso que eles aparecem lado a lado:
 
 | | Travelfusion | LATAM NDC |
 |---|---|---|
@@ -92,13 +108,14 @@ seu próprio 403:
 
 `LATAM_AGENCY_ID` entra na mensagem mas o sandbox **não valida** o valor.
 
-**Travelfusion** — o Welcome Pack entrega três contas diferentes, e trocá-las devolve
+`PROVIDERS` define quem está no ar e a ordem — o primeiro é o padrão de quem não escolhe. Tirar um
+dali o desliga sem deploy. **Com o foco na LATAM, use `PROVIDERS=latam`**: com a Travelfusion ligada,
+toda busca também a consulta, e ela devolve `provider_error` por IP não liberado.
+
+**Travelfusion** (arquivada) — o Welcome Pack entrega três contas diferentes, e trocá-las devolve
 `4-3900 Invalid credentials`. A do `.env` é a da linha **"API account"**, não a do portal Reports nem
 a do IBE. Seis senhas erradas seguidas **desativam** o usuário, por isso o `getLoginId` tem cache
-negativo: a primeira recusa é memorizada e as chamadas seguintes falham sem sair para a rede.
-
-`PROVIDERS=latam,travelfusion` define quem está no ar e a ordem — o primeiro é o padrão de quem não
-escolhe. Tirar um dali o desliga sem deploy.
+negativo. Mais em [`docs/travelfusion/`](docs/travelfusion/README.md).
 
 ### Sem credencial
 
@@ -159,7 +176,7 @@ api/src/
       provider.types.ts     a fronteira
       provider.registry.ts  quem atende esta requisição
       latam/                client OAuth2, comandos NDC, normalizador
-      travelfusion/         client XML, comandos, normalizadores
+      travelfusion/         client XML, comandos, normalizadores (arquivado)
 api/test/
   contract.spec.ts           invariantes do contrato
   latam.spec.ts              normalizador contra a amostra REAL do portal (433KB)
@@ -168,7 +185,10 @@ web/src/
   components/toolbar/  o toolbar flat do design system da Pass (chips, ícones 1.5)
   components/sandbox/  CodeBlock, FieldTable, Callout, Endpoint — das páginas de operação do portal
   components/ui/       button, input, select, badge, card com as classes do design system
-  steps/             busca → escolher → tarifar → reservar
+  steps/             buscar → escolher → revisar → passageiro → pagar
+docs/
+  latam/             rotas, fluxo, apresentação e resumo
+  travelfusion/      material arquivado da primeira integração
 ```
 
 O `xml.util` vive em `common/` porque os dois provedores o usam — dentro de um deles, a dependência
@@ -215,7 +235,7 @@ navegador (de onde sai o PDF) e um `@media print` que deixa só o bloco do bilhe
 seria um segundo lugar para manter, e o desatualizado apareceria na primeira mudança.
 
 **Uma decisão de exibição vale nota:** a LATAM devolve uma oferta por família tarifária, então o
-mesmo voo chega repetido — a busca GRU→SCL traz 422 tarifas para 94 voos. Listar cru viraria cinco
+mesmo voo chega repetido — a busca GRU→SCL traz 424 tarifas para cerca de 94 voos. Listar cru viraria cinco
 cartões idênticos com preços diferentes. `ResultsStep` agrupa por voo e deixa as famílias como
 escolha dentro do cartão; o `identifier` continua sendo o da família escolhida, nunca remontado.
 
@@ -274,9 +294,14 @@ e cobra esse. Um `amount` no pedido é tratado como *declaração de expectativa
 resposta é `FARE_PRICE_CHANGED` e nada é cobrado. Aceitar o número de quem chama seria deixar o preço
 da cobrança ser decidido fora da companhia — e o erro só apareceria no extrato de quem comprou.
 
-🔴 **Dado de cartão não é logado, não é guardado e não volta na resposta.** O PAN existe em duas
-chamadas porque a operadora precisa dele (parcelas e cobrança), e morre com a requisição. O que fica
-no log é o `correlationId` e o localizador.
+🔴 **Dado de cartão não é guardado e não volta na resposta.** O PAN existe nas chamadas em que a
+operadora precisa dele (parcelas e cobrança) e morre com a requisição. Os logs dessas rotas registram
+só o `correlationId` e o localizador.
+
+⚠️ **Ponto em aberto:** numa falha de rede sem resposta (timeout, conexão recusada), o `LatamClient`
+loga o objeto de erro do axios inteiro, e ele carrega o corpo XML da requisição — com o cartão, no
+`/issue` e no `/sell-ancillaries`. Precisa ser corrigido antes de uso real. Detalhe em
+[`docs/latam/rotas.md`](docs/latam/rotas.md#dado-de-cartão-o-que-é-garantido-e-o-que-ainda-não-é).
 
 #### Cancelar são DUAS operações, e a companhia diz qual
 

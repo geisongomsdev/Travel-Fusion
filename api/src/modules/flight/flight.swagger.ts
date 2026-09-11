@@ -128,7 +128,7 @@ export const NOT_SUPPORTED_ROUTES = {
   issue: {
     summary: 'Emitir',
     description: notSupportedDescription(
-      'Não há emissão separada: o StartBooking já cobra. A separação reservar/emitir do contrato não tem equivalente no provedor — ver docs/decisoes.md.',
+      'Não há emissão separada: o StartBooking já cobra. A separação reservar/emitir do contrato não tem equivalente no provedor — ver docs/travelfusion/decisoes.md.',
     ),
   },
   retrieveEticket: {
