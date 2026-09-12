@@ -1,16 +1,16 @@
 # Rotas da API — referência completa (LATAM NDC)
 
 Este documento descreve **cada rota** da API como ela funciona hoje com a LATAM: o que recebe, o que
-faz por dentro e em que ordem, qual mensagem NDC dispara, o que devolve, que erros podem voltar e o que
-já foi verificado contra o sandbox real.
+faz por dentro e em que ordem, qual mensagem NDC dispara, o que devolve, que erros podem voltar e o
+que já foi verificado contra o sandbox real.
 
 Para outros públicos:
 
 - quem **não programa** → [`fluxo.md`](fluxo.md), o mesmo caminho explicado sem código;
 - quem vai **apresentar** o projeto → [`apresentacao.md`](apresentacao.md);
-- o **porquê** de cada descoberta sobre o NDC → [`README` da raiz](../../README.md#o-que-a-doc-da-latam-não-conta).
+- o **porquê** de cada descoberta sobre o NDC → [`README` da raiz](../../README.md).
 
-> Os exemplos de JSON mostram a **forma real** das respostas. Os **valores** (preços, horários, ids)
+> Os exemplos de JSON mostram a **forma real** das mensagens. Os **valores** (preços, horários, ids)
 > são ilustrativos, exceto quando o texto diz que foram medidos no sandbox.
 
 ---
@@ -32,13 +32,13 @@ Para outros públicos:
 | 10 | [`POST /order-seat-map`](#post-order-seat-map--assentos-da-reserva-loja) | pós-compra | `OrderRetrieve` + `SeatAvailability`, pela ordem | não | ✅ 279 assentos |
 | 11 | [`POST /order-ancillaries`](#post-order-ancillaries--opcionais-da-reserva-loja) | pós-compra | `OrderRetrieve` + `ServiceList`, pela ordem | não | ✅ 5 bagagens |
 | 12 | [`POST /sell-ancillaries`](#post-sell-ancillaries--comprar-assento-e-bagagem) | pós-compra | `OrderChange` **v24.1** | **sim, cobra** | ⚠️ sandbox recusa a cobrança |
-| 13 | [`POST /mark-seats`](#post-mark-seats--marcar-assento) | pós-compra | igual ao `/sell-ancillaries` | **sim, cobra** | ⚠️ idem |
+| 13 | [`POST /mark-seats`](#post-mark-seats--marcar-assento) | pós-compra | `SeatAvailability` + `OrderChange` 24.1 | **sim, cobra** | ⚠️ idem |
 | 14 | [`POST /cancel-booking`](#post-cancel-booking--cancelar) | pós-compra | `OrderReshop` + `OrderCancel` v19.2 | **sim** | ✅ void, R$ 1.023,18 |
 | — | [Rotas que respondem 501](#rotas-que-respondem-501) | — | — | — | — |
 
-As rotas 10 e 11 não existem no contrato canônico de 17 rotas (`docs-api/`). Foram acrescentadas
-porque a LATAM tem **dois catálogos** de assento e bagagem, e a compra pós-emissão só aceita o segundo
-(ver [`/sell-ancillaries`](#post-sell-ancillaries--comprar-assento-e-bagagem)).
+As rotas 10 e 11 não existem no contrato canônico de 17 rotas. Foram acrescentadas porque a LATAM tem
+**dois catálogos** de assento e bagagem, e a compra pós-emissão só aceita o segundo (ver
+[`/sell-ancillaries`](#post-sell-ancillaries--comprar-assento-e-bagagem)).
 
 ---
 
@@ -56,20 +56,20 @@ sequenceDiagram
     L-->>A: ofertas (uma por família tarifária)
     A-->>T: stream: start → provider_success → filters → complete
 
-    T->>A: POST /quote {identifier}
+    T->>A: POST /quote {offers:[{fareId}]}
     A->>L: OfferPrice
     A-->>T: preço firme + dados exigidos
 
-    T->>A: POST /booking {identifier, passageiros, contato}
+    T->>A: POST /booking {customer, people, fields.selectedFareId}
     A->>L: OrderCreate
     A-->>T: 201 · locator, status OPENED (não paga, com prazo)
 
-    T->>A: POST /financing-options {locator, card}
+    T->>A: POST /financing-options {booking, payment.creditCard.number}
     A->>L: InstallmentOptions
-    T->>A: POST /issue {locator, cartão, titular}
+    T->>A: POST /issue {issue:{booking, payment}}
     A->>L: OrderRetrieve (quanto cobrar?)
     A->>L: OrderChange + pagamento
-    A-->>T: issued · CLOSED
+    A-->>T: confirmed · CLOSED
 
     Note over T,L: com a passagem paga (nada disso é passo obrigatório)
     T->>A: POST /retrieve → bilhete
@@ -81,6 +81,25 @@ sequenceDiagram
 ---
 
 ## Convenções que valem para todas as rotas
+
+### O dialeto do pedido
+
+O corpo das rotas segue os **modelos canônicos** (`models/`). Duas regras estruturais:
+
+**1. Rota que MUTA carrega um bloco com o nome da operação.** `cancel`, `issue`, `sellAncillaries`,
+`markSeats`, `removeSeats`, `cancelEticket`, `retrieveEticket`, `paymentOptions`, `fareRules`.
+
+```jsonc
+{ "cancel": { "booking": { "locator": "LA…" } } }   // cancelar
+{ "issue":  { "booking": { "locator": "LA…" }, "payment": { … } } }  // pagar
+```
+
+🔴 Não é enfeite. Um `{ "booking": { "locator": … } }` solto serve para cancelar, emitir e consultar,
+e um cliente que erra a rota manda um corpo que o servidor aceita sem reclamar. Com o bloco, o corpo
+diz qual operação ele descreve.
+
+**2. Rota de LEITURA fica sem o bloco.** `/retrieve` e `/financing-options` recebem o endereço direto,
+porque ali o corpo não descreve intenção — só endereço.
 
 ### Endereço, método e formato
 
@@ -119,7 +138,7 @@ O **guard vem antes da validação** de propósito: um `/remove-seats` com corpo
 | Rota | Como o provedor é decidido |
 |---|---|
 | `/availability` | `options.provider[]` ou, sem ele, **todos** os de `PROVIDERS`, em paralelo |
-| `/quote`, `/booking`, `/seat-map`, `/ancillaries`, `/fare-rules` | o campo `p` **dentro do `identifier`** — nunca um parâmetro à parte |
+| `/quote`, `/booking`, `/seat-map`, `/ancillaries`, `/fare-rules` | o campo `p` **dentro da chave opaca** — nunca um parâmetro à parte |
 | `/retrieve`, `/cancel-booking`, `/financing-options`, `/issue`, `/order-*`, `/sell-ancillaries`, `/mark-seats` | `options.provider`; sem ele, o **primeiro** de `PROVIDERS` |
 | `/ping` | `options.provider`, obrigatório |
 
@@ -131,12 +150,12 @@ Para uma instância só com LATAM: `PROVIDERS=latam`.
 
 ### Envelope de sucesso
 
-Todas as rotas, exceto `/availability` e `/retrieve`, respondem com exatamente três chaves no topo:
+Todas as rotas **exceto `/availability`** respondem com exatamente três chaves no topo:
 
 ```json
 {
   "success": true,
-  "data": { "...": "o resultado da rota" },
+  "data": { "…": "o resultado da rota" },
   "meta": {
     "provider": "latam",
     "duration": 1843,
@@ -146,6 +165,11 @@ Todas as rotas, exceto `/availability` e `/retrieve`, respondem com exatamente t
   }
 }
 ```
+
+> ⚠️ **Mudou.** O `/retrieve` tinha um envelope PRÓPRIO, de seis chaves (`connector`, `booking`,
+> `status`, `message`…), e o `/cancel-booking` embrulhava os dados num `data.data`. As duas exceções
+> foram removidas: eram exatamente o tipo de caso especial que obriga quem consome a escrever um
+> caminho por rota. Hoje só o `/availability` sai do padrão, porque é stream.
 
 `meta.duration` é o tempo da requisição inteira em milissegundos, que nessas rotas é praticamente o
 tempo da LATAM. `meta.provider` é o provedor que **atendeu**, lido de `data.provider`.
@@ -174,8 +198,8 @@ Qualquer falha — validação, regra, LATAM, timeout — sai neste formato:
 }
 ```
 
-- `error.code` sai sempre do catálogo de 18 códigos (`api/src/common/errors/error-codes.ts`), e
-  `message` é o texto fixo desse código, em inglês. O texto da LATAM **nunca** vira `message`.
+- `error.code` sai sempre do catálogo (`api/src/common/errors/error-codes.ts`), e `message` é o texto
+  fixo desse código, em inglês. O texto da LATAM **nunca** vira `message`.
 - `provider` e `providerError` só aparecem quando a falha veio da companhia. Antes de publicar, a API
   apaga padrões de segredo (`Bearer …`, `Basic …`, `api_key=…`) e corta a mensagem em 400 caracteres.
 - `details` só aparece em erro de validação ou regra; `metadata` só quando há o que dizer.
@@ -187,30 +211,65 @@ Mande `x-correlation-id` no pedido para usar o seu; sem ele a API gera um UUID. 
 da resposta, em `meta.correlationId` ou `correlationId` do erro, e vai para a LATAM como
 `X-latam-Track-Id`. É o fio que liga a tela, o log da API e o suporte da LATAM.
 
-### Validação do corpo
+### A chave opaca de venda (`fareId`)
 
-- Campo obrigatório ausente ou com formato errado → `400 SEARCH_VALIDATION_ERROR`, com
-  `details.errors` no formato `{ "campo": ["frase"] }`.
-- Campo **desconhecido** é descartado em silêncio, não recusado (`whitelist: true`,
-  `forbidNonWhitelisted: false` no `main.ts`).
+🔴 **A chave é da TARIFA, não do trecho.** Um voo tem várias famílias tarifárias (LIGHT, PLUS, TOP) e
+**cada uma é uma venda diferente**. Por isso:
 
-### Identificador opaco (`identifier`)
+| Campo | O que é | Serve para |
+|---|---|---|
+| `departure[].identifier` | a journey da companhia (`JOURNEY_1`) | contexto, auditoria |
+| `departure[].fares[].fareId` | a chave **opaca** de venda | `/quote`, `/booking`, `/seat-map`, `/ancillaries` |
+| `departure[].fares[].rules.key` | a chave opaca da regra tarifária | `/fare-rules` |
 
-Quem consome a API trata o `identifier` como caixa-preta: copia e devolve igual, sem montar nem ler.
-
-Por dentro, ele é um JSON em base64url que carrega tudo que a LATAM exige para voltar à mesma oferta
-sem a API guardar estado:
+Quem consome trata a chave como caixa-preta: copia e devolve igual, sem montar nem ler. Por dentro é
+um JSON em base64url que carrega tudo que a LATAM exige para voltar à mesma oferta sem a API guardar
+estado:
 
 | Chave | Conteúdo | Por quê |
 |---|---|---|
 | `p` | `"latam"` | decide o provedor nas rotas seguintes |
 | `r` | `OfferID` da LATAM | a oferta inteira (ida + volta) |
-| `o` | `PaxJourneyID` | qual trecho da oferta este `Leg` representa |
+| `o` | `PaxJourneyID` | qual trecho da oferta esta tarifa cobre |
 | `i` | `OfferItemID` (formato `SEI\|…`) | o `OfferPrice` e o `SeatAvailability` pedem o item, não só a oferta |
 | `d` | `"outward"` ou `"return"` | direção |
 | `x` | `["ADT_1", "CHD_1", …]` | a `PaxList` da busca, que o `OfferPrice` exige de volta |
 
 Isso está documentado para quem mantém a API. **Não** é contrato: pode mudar sem aviso.
+
+Os **opcionais** têm a sua própria chave opaca (`offers[].key`, `seats[].key`), que carrega o par
+`OfferItemID` + `ServiceID` — a LATAM exige os dois para vender, e publicar os dois soltos vazaria
+detalhe dela para dentro do vocabulário comum.
+
+### Vocabulário compartilhado
+
+Objetos que aparecem igual em várias rotas:
+
+```jsonc
+"origin": { "iata": "GRU", "city": null, "terminal": null,
+            "coordinates": { "lat": null, "lng": null } },
+
+"time": { "departure": "2026-10-20T08:15:00-03:00",   // hora LOCAL, com fuso
+          "arrival":   "2026-10-20T11:10:00-04:00",
+          "duration":  235 },                          // MINUTOS; 0 = não informada
+
+"baggage": {                       // dois nós, cada um com o SEU included
+  "hand": { "included": true,  "pieces": 1, "weight": 10, "unit": "KG", "description": null },
+  "hold": { "included": false, "pieces": 0, "weight": 0,  "unit": null, "description": null,
+            "type": "checked" }
+},
+
+"taxes": { "boarding": null, "service": null, "fuel": null, "baggage": null, "total": 112.4 }
+```
+
+🔴 Três armadilhas que esses formatos evitam:
+
+- **`hand` ≠ `hold`.** Uma tarifa LIGHT inclui bagagem de mão e **não** inclui despacho. Um booleano
+  único fazia a LIGHT parecer que levava mala.
+- **`taxes.total` é o que a companhia disse.** A LATAM manda o total, não a discriminação. Espalhar
+  esse número em `boarding` publicava como taxa de embarque algo que ela nunca separou.
+- **`duration` em minutos, não ISO.** A companhia declara `PT3H55M`; a API converte. Deixar o ISO
+  passar obrigava cada tela a escrever o próprio parser.
 
 ### Tudo que a API manda para a LATAM em toda chamada
 
@@ -220,7 +279,6 @@ Isso está documentado para quem mantém a API. **Não** é contrato: pode mudar
 - **Headers**: `Authorization: Bearer …`, `X-latam-client-name`, `X-latam-Application-Name`,
   `X-latam-api-key`, `X-latam-Track-Id`, `X-latam-Country`, `X-latam-Lang`, `x-latam-Api-Version`.
 - **No corpo NDC**: `MessageDoc`, `Party/Sender/TravelAgency` (agência, IATA, agente) e `POS/Country`.
-  Cada campo de agência ausente tem o seu 403 (tabela no README da raiz).
 - Sem `LATAM_API_KEY`/`LATAM_API_SECRET`, a API responde `401 PROVIDER_AUTHENTICATION_FAILED`
   **antes de sair para a rede**, com a instrução em `providerError.providerMessage`.
 
@@ -285,14 +343,15 @@ Liveness. Não chama provedor nenhum e não usa o envelope.
 ```json
 {
   "status": "ok",
-  "service": "travelfusion-flight-api",
+  "service": "pass-flight-api",
   "port": 3010,
-  "provider": { "endpoint": "https://api.travelfusion.com/Xml", "credentials": "configured" }
+  "providers": ["latam"],
+  "credentials": { "latam": "configured" }
 }
 ```
 
-⚠️ O bloco `provider` ainda descreve a configuração da **Travelfusion**, herança da primeira versão.
-Para saber se a LATAM está configurada e responde, use o `/ping`.
+Para saber se a LATAM responde de verdade, use o `/ping`: este endpoint só diz se a **configuração**
+está de pé.
 
 ---
 
@@ -327,8 +386,8 @@ Para saber se a LATAM está configurada e responde, use o `/ping`.
 
 1. Confere o limite de 10 por minuto. Estourou → `429 RATE_LIMITED`, sem chamar a LATAM.
 2. Pede um token novo à LATAM.
-3. Respondeu → `valid: true`. Recusou → `401 PROVIDER_AUTHENTICATION_FAILED`. Não existe
-   `200` com `valid: false`.
+3. Respondeu → `valid: true`. Recusou → `401 PROVIDER_AUTHENTICATION_FAILED`. Não existe `200` com
+   `valid: false`.
 
 **Resposta**
 
@@ -362,59 +421,65 @@ liberada. O teste definitivo é um `/availability` que volta ofertas.
 | Resposta | `text/event-stream` |
 | Sandbox | ✅ GRU→SCL: 424 tarifas para cerca de 94 voos, 12 delas executiva |
 
-**Para que serve.** Listar o que existe para uma origem, destino, data e composição de passageiros.
-
-**Pedido**
+**Pedido** — a viagem é descrita por **pontas**, não por lista de trechos:
 
 ```json
 {
   "type": "roundtrip",
-  "legs": [
-    { "origin": "GRU", "destination": "SCL", "date": "2026-10-20" },
-    { "origin": "SCL", "destination": "GRU", "date": "2026-10-27" }
+  "departure": { "iata": "GRU", "date": "2026-10-20" },
+  "arrival":   { "iata": "SCL", "date": "2026-10-27" },
+  "passengers": { "adults": 1, "children": 0, "infants": 0 },
+  "options": { "provider": ["latam"], "class": "business", "refundable": false,
+               "language": "pt-br", "country": "BR" }
+}
+```
+
+Multidestino usa `segments[]`, a lista **completa**:
+
+```json
+{
+  "type": "multicity",
+  "segments": [
+    { "origin": "GRU", "destination": "SCL", "date": "2026-10-15" },
+    { "origin": "SCL", "destination": "LIM", "date": "2026-10-19" },
+    { "origin": "LIM", "destination": "GRU", "date": "2026-10-25" }
   ],
-  "passengers": { "adults": 1, "children": 0, "babies": 0 },
-  "options": { "provider": ["latam"], "class": "business", "refundable": false }
+  "passengers": { "adults": 1 }
 }
 ```
 
 | Campo | Regra |
 |---|---|
-| `type` | `oneway`, `roundtrip` ou `multicity` |
-| `legs[]` | 1 item na ida, 2 na ida e volta, N no multidestino. `origin`/`destination` com 3 letras IATA; `date` em `YYYY-MM-DD` |
+| `type` | `oneway`, `roundtrip` ou `multicity`. **Explícito** — nunca inferido pelas datas |
+| `departure.iata` / `.date` | obrigatórios em `oneway` e `roundtrip` |
+| `arrival.iata` | obrigatório; `arrival.date` é a **volta**, obrigatória em `roundtrip` |
+| `segments[]` | só em `multicity`, mínimo 2 |
 | `passengers.adults` | inteiro ≥ 1 |
-| `passengers.children`, `babies` | inteiros ≥ 0, opcionais (`babies` = bebê de colo) |
+| `passengers.children`, `infants` | inteiros ≥ 0, opcionais |
 | `options.provider` | lista de nomes; opcional |
 | `options.class` | `economy`, `premium_economy`, `business`, `first`; opcional |
 | `options.refundable` | `true` devolve só tarifa que a LATAM **afirma** ser reembolsável |
 
+🔴 Em ida-e-volta o destino da ida é a origem da volta — por isso uma ponta só, e não duas pernas.
+`type` explícito existe para ninguém adivinhar ida-e-volta a partir de duas datas.
+
+A coerência entre `type` e o corpo é checada **antes do primeiro evento**: um `roundtrip` sem
+`arrival.date` vira `fatal_error` com `SEARCH_VALIDATION_ERROR`, em vez de abrir o stream e morrer
+depois de já ter dito "buscando".
+
 **O que a API faz**
 
-1. Resolve os provedores. Nome desconhecido ou desligado → evento `fatal_error` com
-   `SEARCH_VALIDATION_ERROR`.
+1. Resolve os provedores e valida a forma da viagem.
 2. Emite `start` imediatamente.
 3. Monta um `OriginDestCriteria` por trecho, na ordem do itinerário, e uma `Pax` por passageiro
-   (`ADT_1`, `ADT_2`, `CHD_1`, `INF_1`…). **Não manda a cabine** para a LATAM (motivo abaixo).
+   (`ADT_1`, `CHD_1`, `INF_1`…). **Não manda a cabine** para a LATAM (motivo abaixo).
 4. Chama o `AirShopping`. Ele é síncrono: a resposta única já traz todas as ofertas.
-5. Normaliza cada `<Offer>` numa oferta canônica `{ outbound, inbound }`: a ida e a volta que a LATAM
-   declarou juntas no mesmo `OfferID`. A API nunca combina ida de uma oferta com volta de outra.
+5. Normaliza cada `<Offer>` numa oferta canônica `{ outbound, inbound }`.
 6. Aplica `options.class` e `options.refundable` sobre o resultado normalizado.
-7. Emite `provider_success` com as ofertas, ou `provider_error` se não sobrou nenhuma ou se deu erro.
-8. Emite `filters` (os filtros da tela) e `complete`, e fecha a conexão.
+7. Emite `provider_success`, ou `provider_error` se não sobrou nada.
+8. Emite `filters` e `complete`, e fecha a conexão.
 
-**Resposta — o stream**
-
-Cada evento é uma linha `data: {json}` seguida de linha em branco:
-
-```
-data: {"type":"start","message":"Iniciando busca de voos","providers":[{"provider":"latam"}],"totalProviders":1,"international":false,"timestamp":"…"}
-
-data: {"type":"provider_success","provider":"latam","data":{"groups":[…],"departure":[],"return":[]},"groups":212,"departure":0,"return":0,"payment":{"acceptedTypes":["credit-card"]},"timestamp":"…"}
-
-data: {"type":"filters","trip_type":"roundtrip","data":{"filters":{"airlines":[{"code":"LA","name":null,"count":212}],"stops":{"departure":{"direct":150,"1":62}},"currency":{"min":812.4,"max":6120.9},"providers":{"latam":212},"refundable":{"refundable":40,"nonRefundable":172}}},"timestamp":"…"}
-
-data: {"type":"complete","totalCount":212,"countType":"groups","totalFlights":212,"message":"Busca concluída: 212 grupos de preço encontrados","duration":8410,"providers":[{"provider":"latam"}],"timestamp":"…"}
-```
+**O stream** — cada evento é uma linha `data: {json}` seguida de linha em branco:
 
 | Evento | Quando | Encerra? |
 |---|---|---|
@@ -429,25 +494,25 @@ data: {"type":"complete","totalCount":212,"countType":"groups","totalFlights":21
 
 | `type` | Preenchido | Forma |
 |---|---|---|
-| `oneway` | `departure[]` | `{ "departure": [Leg], "groups": [] }` |
-| `roundtrip` | `groups[]` | `{ "groups": [{ "departure": [Leg], "return": [Leg], "fares": [Fare] }], "departure": [], "return": [] }` |
+| `oneway` | `departure[]` | `{ "departure": [Leg], "return": [], "groups": [] }` |
+| `roundtrip` | `groups[]` | `{ "groups": [{ "id": 1, "price": {…}, "departure": [Leg], "return": [Leg], "fares": [Fare] }], "departure": [], "return": [] }` |
 | `multicity` | `itineraries[]` | `{ "itineraries": [{ "legs": [[Leg], [Leg]], "fares": [Fare] }] }` |
 
-**Um `Leg`** (um trecho de uma oferta):
+**Um `Leg`**:
 
 ```json
 {
-  "identifier": "eyJwIjoibGF0YW0iLCJyIjoi…",
+  "identifier": "JOURNEY_1",
   "company": { "code": "LA", "name": null },
-  "origin": { "code": "GRU", "name": null },
-  "destination": { "code": "SCL", "name": null },
-  "time": { "departure": "2026-10-20T08:15:00-03:00", "arrival": "2026-10-20T11:10:00-04:00" },
+  "origin": { "iata": "GRU", "city": null, "terminal": null, "coordinates": { "lat": null, "lng": null } },
+  "destination": { "iata": "SCL", "city": null, "terminal": null, "coordinates": { "lat": null, "lng": null } },
+  "time": { "departure": "2026-10-20T08:15:00-03:00", "arrival": "2026-10-20T11:10:00-04:00", "duration": 235 },
   "stops": 0,
   "flights": [
     {
-      "origin": { "code": "GRU", "name": null },
-      "destination": { "code": "SCL", "name": null },
-      "time": { "departure": "2026-10-20T08:15:00-03:00", "arrival": "2026-10-20T11:10:00-04:00" },
+      "origin": { "iata": "GRU", "city": null, "terminal": null, "coordinates": { "lat": null, "lng": null } },
+      "destination": { "iata": "SCL", "city": null, "terminal": null, "coordinates": { "lat": null, "lng": null } },
+      "time": { "departure": "2026-10-20T08:15:00-03:00", "arrival": "2026-10-20T11:10:00-04:00", "duration": 235 },
       "company": { "code": "LA", "name": null, "operating": "LA" },
       "number": "8070",
       "segment": 0,
@@ -458,7 +523,7 @@ data: {"type":"complete","totalCount":212,"countType":"groups","totalFlights":21
   ],
   "fares": [
     {
-      "fareId": "SEI|…",
+      "fareId": "eyJwIjoibGF0YW0iLCJyIjoi…",
       "code": "LIGHT",
       "familyCode": "…",
       "family": "LIGHT",
@@ -467,26 +532,25 @@ data: {"type":"complete","totalCount":212,"countType":"groups","totalFlights":21
       "cabin": "economy",
       "seats": null,
       "price": {
-        "adult": { "base": 700.0, "taxes": { "boarding": 112.4, "service": 0, "fuel": 0, "baggage": 0 }, "fees": 0, "total": 812.4, "currency": "BRL" },
+        "adult": { "base": 700.0, "taxes": { "boarding": null, "service": null, "fuel": null, "baggage": null, "total": 112.4 }, "fees": 0, "total": 812.4, "currency": "BRL" },
         "child": null,
         "baby": null,
-        "total": { "base": 700.0, "taxes": { "boarding": 112.4, "service": 0, "fuel": 0, "baggage": 0 }, "fees": 0, "total": 812.4, "currency": "BRL" },
+        "total": { "base": 700.0, "taxes": { "boarding": null, "service": null, "fuel": null, "baggage": null, "total": 112.4 }, "fees": 0, "total": 812.4, "currency": "BRL" },
         "perPassenger": 812.4,
-        "net": null,
-        "exchange": null
+        "net": null
       },
       "fees": [],
-      "baggage": { "included": false, "quantity": null, "weight": null, "unit": null },
+      "baggage": {
+        "hand": { "included": true, "pieces": 1, "weight": 10, "unit": "KG", "description": null },
+        "hold": { "included": false, "pieces": 0, "weight": 0, "unit": null, "description": null, "type": "checked" }
+      },
       "rules": {
         "refundable": false, "changeable": true, "penalties": [],
         "refund": null, "change": null, "cancellation": null, "noShow": null,
         "endorsable": null, "transferable": null,
         "key": "eyJwIjoibGF0YW0i…"
       },
-      "benefits": {
-        "seatSelection": null, "checkedBaggage": null, "carryOn": null, "meal": null,
-        "loyaltyPoints": null, "priorityBoarding": null, "refund": null, "change": null
-      }
+      "benefits": null
     }
   ],
   "fees": []
@@ -497,33 +561,28 @@ data: {"type":"complete","totalCount":212,"countType":"groups","totalFlights":21
 
 | Campo | Origem no `AirShoppingRS` | Detalhe |
 |---|---|---|
-| `time.departure/arrival` | `Dep`/`Arrival` → `AircraftScheduledDateTime` + atributo `TimeZoneCode` | o fuso vem num atributo separado; sem juntá-lo, um voo das 23h em Lima cai em outro dia na tela |
+| `time.departure/arrival` | `Dep`/`Arrival` → `AircraftScheduledDateTime` + atributo `TimeZoneCode` | o fuso vem num atributo separado; sem juntá-lo, um voo das 23h em Lima cai em outro dia |
+| `time.duration` | `Duration` (ISO-8601) → minutos | a companhia tem precedência sobre a conta pelos carimbos |
 | `company.operating` | `OperatingCarrierInfo`; sem ele, o próprio `MarketingCarrierInfo` | codeshare é informação do segmento |
 | `cabin` | `CabinTypeCode` (Y/M, W/S, C/J, F) ou `CabinTypeName` | código desconhecido vira `null`, nunca um chute |
 | `stops` | quantidade de segmentos − 1 | |
 | `fares[].code`, `family` | `PriceClassList` (`Code`/`Name`) ou `FareRefText` | LIGHT, PLUS, TOP… |
-| `fares[].price.adult/child/baby` | `FareDetail` por `PaxRefID` (`ADT_`, `CHD_`, `INF_`) | tudo ou nada: sem o adulto, os três vêm `null` |
-| `fares[].baggage` | `BaggageAllowance` com `TypeCode=Checked`, peso em KG | bagagem de mão não conta como despachada |
-| `fares[].rules.refundable/changeable` | `CancelRestrictions`/`ChangeRestrictions` → `AllowedModificationInd` | basta um passageiro sem permissão para a oferta inteira não ter |
-| `benefits.*` | não preenchido | a LATAM não estrutura isso na busca |
+| `fares[].price.adult/child/baby` | `FareDetail` por `PaxRefID` | tudo ou nada: sem o adulto, os três vêm `null` |
+| `fares[].baggage.hold` | `BaggageAllowance` com `TypeCode=Checked`, peso em KG | `hand` sai do `CarryOn` |
+| `fares[].rules.*` | `CancelRestrictions`/`ChangeRestrictions` → `AllowedModificationInd` | basta um passageiro sem permissão para a oferta inteira não ter |
+| `benefits` | `null` | a LATAM não estrutura comodidade na busca |
 
 **Regras que importam**
 
-- 🔴 **Uma oferta por família tarifária.** O mesmo voo chega repetido, uma vez para cada família
-  (LIGHT, PLUS, TOP…), e cada `Leg` traz exatamente **uma** tarifa. A tela agrupa por voo; o
-  `identifier` usado adiante é sempre o da família escolhida.
+- 🔴 **Uma oferta por família tarifária.** O mesmo voo chega repetido, e cada `Leg` traz **uma**
+  tarifa. A tela agrupa por voo; o que segue adiante é o `fareId` da família escolhida.
 - 🔴 **A cabine é filtrada do nosso lado, não na LATAM.** Com `PreferredCabinType C` o `AirShopping`
-  devolveu **0** ofertas na mesma busca em que, sem filtro, devolveu **424**, 12 delas de executiva.
-  Filtrando depois, `class=business` devolve 6.
+  devolveu **0** ofertas na mesma busca em que, sem filtro, devolveu **424**, 12 de executiva.
 - `refundable: null` significa "a LATAM não disse". Quem pede só reembolsável não recebe essas.
 - **Sem voos não é erro**: vem `provider_error` com `data.error.code = "NO_FLIGHTS"` e **sem**
-  `canonicalCode`, e o stream termina normalmente em `complete`. Para distinguir "sem voos" de
-  "falhou", olhe `canonicalCode`, não `type`.
-- Falha de um provedor vira `provider_error` com `canonicalCode`, `category`, `message` e
-  `providerError`. Os outros provedores seguem.
+  `canonicalCode`. Para distinguir "sem voos" de "falhou", olhe `canonicalCode`, não `type`.
 - Ida e volta sem a volta não aparece: a LATAM não vende meia viagem.
 - `international` é sempre `false`. Não há tabela IATA → país, e a API não adivinha.
-- Multidestino: cada trecho vira `legs[i] = [Leg]`, um balde com uma opção só.
 
 ---
 
@@ -535,50 +594,57 @@ data: {"type":"complete","totalCount":212,"countType":"groups","totalFlights":21
 | Mensagem LATAM | `IATA_OfferPriceRQ` → `POST /ndc/v192/offerPrice` (camelCase — ver abaixo) |
 | Escreve? | não |
 | Timeout / retry | 45 s / 1 |
-| Sandbox | ✅ |
 
 **Para que serve.** Entre a busca e a escolha passa tempo, e passagem muda de preço ou esgota. O
-`/quote` pergunta de novo à LATAM: "esta oferta ainda existe, e por quanto?"
+`/quote` pergunta de novo: "esta oferta ainda existe, e por quanto?"
 
 **Pedido**
 
 ```json
-{ "identifier": "eyJwIjoibGF0YW0iLCJyIjoi…" }
+{
+  "type": "roundtrip",
+  "offers": [
+    {
+      "journeyKey": "JOURNEY_1",
+      "fareId": "eyJwIjoibGF0YW0iLCJyIjoi…",
+      "fareCode": "Q00QP5ZI",
+      "bookingClass": "Q",
+      "familyCode": "RY",
+      "flightNumbers": ["LA8000"]
+    }
+  ],
+  "passengers": { "adults": 1 },
+  "options": { "language": "pt-br", "country": "BR" }
+}
 ```
 
-Em ida e volta, tanto faz mandar o `identifier` da ida ou da volta: os dois apontam para o mesmo
-`OfferID`.
+🔴 **Só `fareId` decide a venda.** Os outros campos são contexto de auditoria — o que a tela mostrou
+quando a pessoa clicou — e **não** substituem a chave: remontar a seleção a partir de `fareCode` +
+`bookingClass` é o caminho clássico para tarifar uma família diferente da exibida.
 
-**O que a API faz**
+Em ida e volta, tanto faz mandar o `fareId` da ida ou o da volta: os dois apontam para o mesmo
+`OfferID`. Ofertas de **provedores diferentes** no mesmo pedido → `400`: um pacote não se monta entre
+companhias, e tarifar só a primeira devolveria um preço que não cobre a viagem.
 
-1. Abre o `identifier`. Não abriu → `400 SEARCH_VALIDATION_ERROR` ("Identificador de oferta inválido
-   ou expirado"), sem chamar a LATAM.
-2. Pega o provedor em `p`.
-3. Envia `SelectedOffer` com `OfferRefID` (`r`), `OwnerCode: LA` e `SelectedOfferItem` com
-   `OfferItemRefID` (`i`) e os `PaxRefID` (`x`), além da `DataLists/PaxList` com os mesmos
-   passageiros da busca.
-4. Lê `PricedOffer/Offer/TotalPrice`. Sem `TotalAmount` → `502 PRICING_ERROR`.
-
-**Resposta**
+**Resposta** — plana, não aninhada em `price`:
 
 ```json
 {
   "success": true,
   "data": {
-    "identifier": "eyJwIjoibGF0YW0iLCJyIjoi…",
     "provider": "latam",
-    "price": {
-      "base": 850.0,
-      "taxes": { "boarding": 173.18, "service": 0, "fuel": 0, "baggage": 0 },
-      "fees": 0,
-      "total": 1023.18,
-      "currency": "BRL"
-    },
+    "available": true,
+    "familyCode": "RY",
+    "family": "PREMIUM ECONOMY FULL",
+    "currency": "BRL",
+    "base": 850.0,
+    "taxes": 173.18,
+    "total": 1023.18,
     "requiredParameters": [
       { "name": "firstName", "type": "string", "displayText": "Nome", "perPassenger": true, "optional": false, "options": [] },
       { "name": "lastName", "type": "string", "displayText": "Sobrenome", "perPassenger": true, "optional": false, "options": [] },
-      { "name": "dateOfBirth", "type": "date", "displayText": "Data de nascimento", "perPassenger": true, "optional": false, "options": [] },
-      { "name": "documentNumber", "type": "string", "displayText": "Documento", "perPassenger": true, "optional": false, "options": [] },
+      { "name": "birthDate", "type": "date", "displayText": "Data de nascimento", "perPassenger": true, "optional": false, "options": [] },
+      { "name": "document", "type": "string", "displayText": "Documento", "perPassenger": true, "optional": false, "options": [] },
       { "name": "email", "type": "email", "displayText": "E-mail de contato", "perPassenger": false, "optional": false, "options": [] },
       { "name": "phone", "type": "string", "displayText": "Telefone de contato", "perPassenger": false, "optional": false, "options": [] }
     ]
@@ -587,9 +653,12 @@ Em ida e volta, tanto faz mandar o `identifier` da ida ou da volta: os dois apon
 }
 ```
 
-`requiredParameters` diz o que a tela precisa coletar antes do `/booking`. Na LATAM essa lista é fixa,
-porque os campos exigidos estão no schema do `OrderCreate`. `perPassenger: false` significa um valor
-para a reserva inteira.
+O tarifar devolve **um** preço — o da oferta escolhida —, enquanto a busca devolve muitos e precisa
+da discriminação por passageiro. Repetir a estrutura da busca aqui faria descer dois níveis para ler
+um número. `taxes` é escalar pelo mesmo motivo: nenhum provedor discrimina imposto no tarifar.
+
+`requiredParameters` diz o que a tela precisa coletar antes do `/booking`. Na LATAM a lista é fixa,
+porque os campos exigidos estão no schema do `OrderCreate`.
 
 **Regras que importam**
 
@@ -598,13 +667,14 @@ para a reserva inteira.
   variável de ambiente (`LATAM_PATH_*`) sem recompilar.
 - Sem `OwnerCode` depois do `OfferRefID` → `cvc-complex-type.2.4.a`. Sem a `PaxList` de volta →
   `cvc-identity-constraint.4.3: Key 'PaxIDKeyRef4' not found`. É por isso que os PaxIDs viajam dentro
-  do `identifier`.
+  da chave opaca.
 
 **Erros esperados**
 
 | Situação | Código | HTTP |
 |---|---|---|
-| `identifier` corrompido ou de provedor desconhecido | `SEARCH_VALIDATION_ERROR` | 400 |
+| `fareId` corrompido ou de provedor desconhecido | `SEARCH_VALIDATION_ERROR` | 400 |
+| ofertas de provedores diferentes | `SEARCH_VALIDATION_ERROR` | 400 |
 | preço mudou (`409107014`) | `FARE_PRICE_CHANGED` | 409 |
 | tarifa esgotou (`409140008`) | `FARE_UNAVAILABLE` | 409 |
 | LATAM não devolveu total | `PRICING_ERROR` | 502 |
@@ -615,28 +685,19 @@ para a reserva inteira.
 
 | | |
 |---|---|
-| Etapa na tela | 3 · Revisar (diálogo de assentos) |
 | Mensagem LATAM | `IATA_SeatAvailabilityRQ` → `POST /ndc/v192/seats/availability`, com `CoreRequest/Offer` |
 | Escreve? | não |
-| Timeout / retry | 45 s / 1 |
-| Sandbox | ✅ |
-
-**Para que serve.** Mostrar o mapa do avião **antes** de reservar, para a pessoa ver o que existe e
-quanto custa. É vitrine: os ids daqui **não servem para comprar** depois da emissão.
 
 **Pedido**
 
 ```json
-{ "identifier": "eyJwIjoibGF0YW0iLCJyIjoi…" }
+{ "fareId": "eyJwIjoibGF0YW0iLCJyIjoi…" }
 ```
 
-**O que a API faz**
-
-1. Abre o `identifier` (inválido → 400) e escolhe o provedor por `p`.
-2. Envia `Offer/OfferID` = o **item** (`i`, formato `SEI|…`), e não o UUID da oferta. Com o UUID a
-   LATAM responde `911 Public flight offer not found in cache by id <uuid>`.
-3. Normaliza: preço e `ServiceID` saem do `ALaCarteOffer`, ligados a cada assento pelo
-   `OfferItemRefID`.
+🔴 **Divergência consciente, e a única do dialeto.** O modelo canônico endereça o mapa pelo
+LOCALIZADOR, supondo escolha pós-reserva. Na LATAM a vitrine responde pela **oferta**, e o localizador
+ainda não existe. Por isso o corpo leva `fareId` e a resposta traz `locator: null`. O caso do modelo
+continua atendido pelo [`/order-seat-map`](#post-order-seat-map--assentos-da-reserva-loja).
 
 **Resposta**
 
@@ -645,10 +706,21 @@ quanto custa. É vitrine: os ids daqui **não servem para comprar** depois da em
   "success": true,
   "data": {
     "provider": "latam",
+    "locator": null,
+    "fareId": "eyJwIjoibGF0YW0i…",
     "currency": "BRL",
+    "paymentRequired": null,
+    "passengers": [
+      { "id": "ADT_1", "firstName": "ANDY", "lastName": "PETERSON", "assignedSeats": null }
+    ],
     "segments": [
       {
-        "segmentId": "…",
+        "segmentId": "SEG_1",
+        "origin": "GRU", "destination": "SCL",
+        "departureDate": "2026-10-20",
+        "number": "8070",
+        "company": { "code": "LA", "name": null },
+        "equipment": { "code": "320", "name": null },
         "cabins": [
           {
             "cabinClass": "Economy",
@@ -659,11 +731,14 @@ quanto custa. É vitrine: os ids daqui **não servem para comprar** depois da em
                 "seats": [
                   {
                     "seat": "12A", "row": "12", "column": "A",
-                    "status": "F", "available": true, "paid": true,
+                    "status": "available", "available": true, "paid": true,
                     "price": { "total": 59.9, "currency": "BRL" },
-                    "characteristic": "window",
-                    "offerItemId": "SEI|…",
-                    "serviceId": "…"
+                    "characteristics": ["window"],
+                    "providerCharacteristics": ["W"],
+                    "commercialName": null,
+                    "accessible": null,
+                    "recline": null,
+                    "key": "eyJvIjoiU0VJfC…"
                   }
                 ]
               }
@@ -672,21 +747,24 @@ quanto custa. É vitrine: os ids daqui **não servem para comprar** depois da em
         ]
       }
     ]
-  },
-  "meta": { "provider": "latam", "operation": "seatMap", "…": "…" }
+  }
 }
 ```
 
+🔴 **`assignedSeats: null` ≠ `[]`.** `null` é "a companhia não informa quais assentos o passageiro já
+tem"; `[]` é "ela informa, e não há nenhum". As duas coisas acontecem, e confundi-las mostra "sem
+assento" para quem já escolheu um.
+
 **Regras que importam**
 
-- 🔴 **Diverge do contrato canônico, de propósito.** O `09-assentos.md` endereça o mapa pelo
-  localizador, supondo escolha depois de reservar. Na LATAM a vitrine responde pela oferta, e o
-  localizador ainda não existe nesse momento.
 - A LATAM fala dois vocabulários de status no mesmo endpoint, conforme o header de versão: V1
   (`Available`/`Unavailable`/`WINDOWS`) e V2 (`F` livre, `O` ocupado, `W` janela). A API aceita os
-  dois. Não está na doc: foi medido chamando a mesma oferta com e sem o header, e explicava 279
-  assentos voltando todos como ocupados.
+  dois e publica o canônico (`available`/`occupied`/`blocked`/`unavailable`), com o código cru ao lado
+  em `providerCharacteristics`. Não está na doc: foi medido chamando a mesma oferta com e sem o
+  header, e explicava 279 assentos voltando todos como ocupados.
 - A LATAM manda um `CabinCompartment` **por fileira**, e não um compartimento com várias fileiras.
+- 🔴 Aqui o `OfferID` é o **item** (`SEI|…`), não o UUID da oferta: com o UUID ela responde
+  `911 Public flight offer not found in cache by id <uuid>`.
 - **Nunca quebra:** mapa ilegível vira `segments: []` e a tela mostra "indisponível". Leitura degrada;
   mutação falha.
 
@@ -696,50 +774,69 @@ quanto custa. É vitrine: os ids daqui **não servem para comprar** depois da em
 
 | | |
 |---|---|
-| Etapa na tela | 3 · Revisar |
 | Mensagem LATAM | `IATA_ServiceListRQ` → `POST /ndc/v192/services/list`, com `CoreRequest/Offer` |
 | Escreve? | não |
-| Timeout / retry | 45 s / 1 |
-| Sandbox | ✅ |
-
-**Para que serve.** Mostrar bagagem extra e outros opcionais antes de reservar. Também é vitrine.
 
 **Pedido**
 
 ```json
-{ "identifier": "eyJwIjoibGF0YW0iLCJyIjoi…" }
+{
+  "ancillaries": {
+    "fareId": "eyJwIjoibGF0YW0iLCJyIjoi…",
+    "type": "baggage",
+    "passengers": ["ADT_1"],
+    "segments": ["SEG_1"]
+  }
+}
 ```
 
-**Resposta**
+`type`, `passengers` e `segments` são filtros opcionais. 🔴 Oferta sem `passengerId`/`segmentId` vale
+para **todos** — `null` ali significa "a viagem inteira", não "nenhum" —, e filtrá-la fora esconderia
+a bagagem que cobre o itinerário completo de quem pediu um trecho específico.
+
+**Resposta** — catálogo completo, não só a lista de ofertas:
 
 ```json
 {
   "success": true,
   "data": {
     "provider": "latam",
-    "ancillaries": [
+    "locator": null,
+    "fareId": "eyJwIjoibGF0YW0i…",
+    "currency": "BRL",
+    "passengers": [{ "id": "ADT_1", "firstName": "ANDY", "lastName": "PETERSON", "type": "ADT" }],
+    "segments": [
+      { "segmentId": "SEG_1", "origin": "GRU", "destination": "SCL",
+        "departureDate": "2026-10-20", "number": "8070", "company": { "code": "LA", "name": null } }
+    ],
+    "offers": [
       {
-        "offerItemId": "…",
-        "serviceId": "…",
-        "name": "Bagagem despachada 23kg",
+        "key": "eyJvIjoiQkFHX…",
+        "type": "baggage",
+        "code": "0C3",
+        "name": "FIRST_ADDITIONAL_BAGGAGE",
         "description": "…",
         "price": { "total": 180.0, "currency": "BRL" },
-        "paxId": "ADT_1",
-        "segmentId": "…"
+        "passengerId": "ADT_1",
+        "segmentId": "SEG_1",
+        "baggage": { "hand": null, "hold": { "included": true, "pieces": 1, "weight": 23, "unit": "KG", "description": null, "type": "checked" } }
       }
     ]
-  },
-  "meta": { "provider": "latam", "operation": "ancillaries", "…": "…" }
+  }
 }
 ```
 
+> ⚠️ **Mudou.** Antes a resposta era só `ancillaries[]`. `passengers` e `segments` vinham no
+> `DataLists` da LATAM e eram descartados — sem eles, as ofertas chegavam amarradas a `passengerId` e
+> `segmentId` que quem consome não sabia traduzir.
+
 **Regras que importam**
 
-- Mesmo endereçamento e mesma divergência do `/seat-map`.
-- O `ServiceList` devolve **também os assentos**. A API os remove daqui (ids ou definições começando
-  com `SEAT_`), porque o lugar deles é o `/seat-map`, com fileira e coluna.
-- Nome e descrição vêm do `ServiceDefinitionList`, ligado por id.
-- Lista vazia é resposta válida. Catálogo ilegível vira `[]`, sem erro.
+- 🔴 **O tipo é DECLARADO, nunca inferido do nome.** O prefixo do `OfferItemID` (`BAG_`, `SEAT_`) é
+  estrutural; o nome é texto comercial que muda de idioma e de campanha.
+- O `ServiceList` devolve **também os assentos**. A API os remove daqui, porque o lugar deles é o
+  `/seat-map`, com fileira e coluna.
+- Lista vazia é resposta válida. Catálogo ilegível vira catálogo vazio, sem erro.
 
 ---
 
@@ -747,12 +844,10 @@ quanto custa. É vitrine: os ids daqui **não servem para comprar** depois da em
 
 | | |
 |---|---|
-| Etapa na tela | 4 · Passageiro |
 | Mensagem LATAM | `IATA_OrderCreateRQ` → `POST /ndc/v192/order/create` |
 | Escreve? | **sim** — cria a ordem na LATAM |
 | Timeout / retry | 90 s / **0** |
 | HTTP de sucesso | **201** (a única rota que não devolve 200) |
-| Sandbox | ✅ devolve localizador, ordem em `OPENED` |
 
 **Para que serve.** Criar a reserva. 🔴 **Reservar não é pagar**: a ordem nasce `OPENED`, sem
 pagamento e com prazo. Passado o prazo, a LATAM a libera sozinha.
@@ -761,41 +856,44 @@ pagamento e com prazo. Passado o prazo, a LATAM a libera sozinha.
 
 ```json
 {
-  "identifier": "eyJwIjoibGF0YW0iLCJyIjoi…",
-  "referenceDate": "2026-10-27",
-  "passengers": [
-    {
-      "firstName": "Andy",
-      "lastName": "Peterson",
-      "dateOfBirth": "1990-04-21",
-      "customParameters": { "documentNumber": "AB123456" }
+  "options": { "provider": "latam" },
+  "customer": { "email": "andy@exemplo.com", "phone": "+55 11 99999-0000", "country": "BR" },
+  "people": {
+    "ADT_1": {
+      "firstName": "ANDY",
+      "lastName": "PETERSON",
+      "ageGroup": "adult",
+      "birthDate": "1990-04-21",
+      "gender": "male",
+      "document": { "type": "PASSPORT", "number": "AB123456", "issuingCountry": "BR", "expiryDate": "2030-01-01" }
     }
-  ],
-  "customParameters": { "email": "andy@exemplo.com", "phone": "+55 11 99999-0000" }
+  },
+  "fields": {
+    "selectedFareId": "eyJwIjoibGF0YW0iLCJyIjoi…",
+    "referenceDate": "2026-10-27"
+  }
 }
 ```
 
+🔴 **`people` é um MAPA, com o PaxID na chave.** É o PaxID que amarra tarifa, assento, bagagem e
+bilhete ao passageiro certo, e a oferta foi tarifada com uma lista específica (`ADT_1`, `CHD_1`…).
+Uma lista posicional funciona até o primeiro pedido com criança, quando a ordem que a tela mandou
+deixa de coincidir com a ordem em que a oferta foi tarifada. O PaxID chega à companhia **como veio** —
+renumerar produz `cvc-identity-constraint.4.3: PaxIDKeyRef não encontrada`.
+
 | Campo | Regra |
 |---|---|
-| `identifier` | o da tarifa revisada no `/quote` |
-| `referenceDate` | data usada para calcular a idade. Em ida e volta, a da **volta**. Sem ela, vale **hoje** |
-| `passengers[]` | pelo menos 1; `firstName`, `lastName`, `dateOfBirth` (`YYYY-MM-DD`) obrigatórios |
-| `passengers[].customParameters.documentNumber` | documento; vai como `IdentityDocTypeCode: P` |
-| `customParameters.email` / `phone` | **pelo menos um** é obrigatório |
+| `customer.email` / `phone` | **pelo menos um**; a LATAM recusa a ordem sem contato |
+| `people.<PaxID>.ageGroup` | `adult`, `child` ou `infant` → PTC `ADT`/`CHD`/`INF` |
+| `people.<PaxID>.birthDate` | `YYYY-MM-DD`; a LATAM recusa quando o PTC não bate com a data |
+| `people.<PaxID>.document.type` | `PASSPORT` → `P`; o resto → `I` (documento local) |
+| `fields.selectedFareId` | a mesma chave tarifada no `/quote` |
+| `fields.referenceDate` | data para conferir a idade. Em ida e volta, a da **volta** |
 
-**O que a API faz**
-
-1. Abre o `identifier` (inválido → 400) e escolhe o provedor por `p`.
-2. Sem e-mail **e** sem telefone → `400 SEARCH_VALIDATION_ERROR` apontando os dois campos, **antes**
-   de chamar a LATAM.
-3. Calcula o tipo de cada passageiro (`ADT`/`CHD`/`INF`) pela idade em `referenceDate`, e não por um
-   campo enviado pelo cliente: a LATAM recusa a ordem quando o tipo não bate com a data de nascimento.
-4. Gera `PaxID` (`ADT_1`, `CHD_1`…) e monta cada `Pax` na **ordem exigida pelo XSD**:
-   `ContactInfoRefID`, `IdentityDoc`, `Individual` (`Birthdate`, `GivenName`, `IndividualID`,
-   `Surname`), `PaxID`, `PTC`.
-5. Replica o mesmo contato num `ContactInfo` por passageiro. O telefone vai só com dígitos.
-6. Envia o `OrderCreate`, **sem retry**.
-7. Lê a ordem. Status `FAILED`/`REJECTED`/`CANCELLED` → `422 BUSINESS_RULE_VIOLATION`.
+> O modelo canônico descreve esta rota como **queue-owned** e embrulha a seleção em `service.flight[]`
+> — a forma que o worker recebe, com os campos de venda que o próprio modelo diz não pertencerem ao
+> provider. Aqui a API é direta: sobrevive `customer`, `people` e `fields.selectedFareId`, que é
+> exatamente o recorte que o mapper da companhia consome.
 
 **Resposta (201)**
 
@@ -803,11 +901,13 @@ pagamento e com prazo. Passado o prazo, a LATAM a libera sozinha.
 {
   "success": true,
   "data": {
-    "locator": "LA9572806QCFT",
+    "provider": "latam",
+    "booking": { "locator": "LA9572806QCFT", "status": "OPENED", "currency": "BRL" },
     "committed": true,
     "confirmed": false,
-    "status": "OPENED",
-    "provider": "latam"
+    "passengers": [{ "id": "ADT_1", "type": "ADT", "firstName": "ANDY", "lastName": "PETERSON" }],
+    "segments": { "departure": null, "return": null, "journeys": [] },
+    "providerStatus": "OPENED"
   },
   "meta": { "provider": "latam", "operation": "createBooking", "…": "…" }
 }
@@ -815,22 +915,19 @@ pagamento e com prazo. Passado o prazo, a LATAM a libera sozinha.
 
 | Campo | Significado |
 |---|---|
-| `locator` | o código da reserva. Usa `BookingRef/ID` quando a LATAM devolve; senão, o `OrderID`. No sandbox veio o `OrderID` (`LA…`) |
-| `committed` | a LATAM aceitou e a ordem existe |
-| `confirmed` | só `true` em status final (`CLOSED`, `CONFIRMED`, `TICKETED`). **Nunca** é deduzido de `committed` |
-| `status` | status cru da LATAM. Depois de reservar, na prática, é `OPENED` |
+| `booking.locator` | o código da reserva. Usa `BookingRef/ID` quando a LATAM devolve; senão, o `OrderID` |
+| `committed` | a LATAM aceitou e a ordem existe. **Nunca `null`** |
+| `confirmed` | só `true` em status final (`CLOSED`, `CONFIRMED`, `TICKETED`). **Nunca** deduzido de `committed` |
+| `segments` | `null`/`[]`: o `OrderViewRS` confirma a ordem e **não repete os trechos**. Quem quer o voo chama o `/retrieve` |
 
 **Regras que importam**
 
-- 🔴 **Guarde o `locator`.** É por ele que todas as rotas seguintes encontram a reserva.
-- 🔴 **Não repita o `/booking` se a resposta se perder.** A primeira chamada pode ter criado a ordem.
-  Consulte o `/retrieve`.
-- `committed: true` com `confirmed: false` é o estado **normal** depois de reservar na LATAM. Não é
-  falha, e não autoriza reservar de novo.
-- A composição de passageiros precisa ser a **mesma da busca**: a oferta foi cotada para aquela
-  quantidade de `ADT`/`CHD`/`INF`.
-- Contato ausente na LATAM volta `912 ContactInfoList is null or empty`; tirar só a referência troca
-  o erro por `cvc-identity-constraint.4.3`. A API recusa antes, com o campo nomeado.
+- 🔴 **Guarde o `booking.locator`.** É por ele que todas as rotas seguintes encontram a reserva.
+- 🔴 **Não repita o `/booking` se a resposta se perder.** Consulte o `/retrieve`.
+- `committed: true` com `confirmed: false` é o estado **normal** depois de reservar. Não é falha, e
+  não autoriza reservar de novo.
+- Contato ausente volta `912 ContactInfoList is null or empty`; tirar só a referência troca o erro por
+  `cvc-identity-constraint.4.3`. A API recusa antes, com o campo nomeado.
 
 ---
 
@@ -838,122 +935,109 @@ pagamento e com prazo. Passado o prazo, a LATAM a libera sozinha.
 
 | | |
 |---|---|
-| Etapa na tela | a qualquer momento; o bilhete é montado com ela |
 | Mensagem LATAM | `IATA_OrderRetrieveRQ` → `POST /ndc/v192/order/retrieve` |
 | Escreve? | não |
-| Timeout / retry | 30 s / 1 |
 | Cache | **nenhum** |
-| Sandbox | ✅ passageiro, documento, nascimento, itinerário e total |
 
-**Para que serve.** Saber o estado da reserva **agora**, perguntando à LATAM. É a leitura
-independente que confirma o efeito de reservar, pagar e cancelar, e é a saída sempre que uma escrita
-perdeu a resposta.
+**Para que serve.** Saber o estado da reserva **agora**. É a leitura independente que confirma o
+efeito de reservar, pagar e cancelar, e a saída sempre que uma escrita perdeu a resposta.
 
 **Pedido**
 
 ```json
 {
   "options": { "provider": "latam" },
-  "booking": { "locator": "LA9572806QCFT", "lastName": "Peterson" }
+  "booking": { "locator": "LA9572806QCFT", "lastName": "Peterson", "language": "pt-br" }
 }
 ```
 
 `booking` é tolerante: campos extras são ignorados, porque cada companhia pede um conjunto diferente.
 A LATAM só usa o `locator`.
 
-**O que a API faz**
-
-1. Escolhe o provedor por `options.provider` (ou o padrão).
-2. Envia `OrderFilterCriteria/Order` com `OrderID` e `OwnerCode: LA`. Sem o nível
-   `OrderFilterCriteria` a LATAM responde `911`.
-3. Sem status na resposta → `404 RESOURCE_NOT_FOUND`.
-4. Decide o status publicado, nesta ordem de precedência:
-   1. **todos** os cupons do bilhete `VOID`/`V`/`REFUND`/`REFUNDED` → `cancelled`;
-   2. status da ordem `CLOSED`/`CONFIRMED`/`TICKETED` → `confirmed`;
-   3. `FAILED`/`REJECTED`/`CANCELLED` → `cancelled`;
-   4. qualquer outro (inclusive `OPENED`) → `pending`.
-5. Monta o envelope próprio com todas as chaves presentes, e `null` onde a LATAM não informa.
-
-**Resposta** — 🔴 sem o envelope de três chaves:
+**Resposta** — 🔴 **agora no envelope padrão**, como todas as outras:
 
 ```json
 {
   "success": true,
-  "connector": "latam",
-  "booking": "LA9572806QCFT",
-  "status": "found",
-  "message": "Booking retrieved successfully",
   "data": {
-    "status": "confirmed",
-    "type": "flight",
+    "booking": {
+      "locator": "LA9572806QCFT",
+      "status": "confirmed",
+      "provider": "latam",
+      "system": "LA",
+      "currency": "BRL",
+      "createdAt": "2026-09-11T13:58:02",
+      "bookedAt": "2026-09-11T13:58:02",
+      "issueDate": null,
+      "timeLimit": "2026-09-12T04:00:00",
+      "permissions": {
+        "canIssue": false, "canCancel": true,
+        "canRebook": null, "canSelectSeats": null,
+        "canReissueCombined": null, "canReissueWithFare": null
+      },
+      "providerStatus": "CLOSED"
+    },
     "trip": "roundtrip",
-    "grouping": null,
-    "title": null,
-    "destination": "GRU",
-    "iata": "GRU",
-    "departure": "2026-10-20T08:15:00",
-    "arrival": "2026-10-27T18:40:00",
-    "currency": "BRL",
-    "createdAt": "2026-09-11T13:58:02",
-    "expiresAt": "2026-09-12T04:00:00",
-    "confirmationAt": "2026-09-11T13:58:02",
-    "provider": { "code": "latam", "name": "LA", "locator": "LA9572806QCFT" },
-    "supplier": { "confirmation": null },
-    "people": [
+    "passengers": [
       {
-        "main": true,
-        "name": "Andy Peterson",
-        "firstName": "Andy",
-        "lastName": "Peterson",
-        "email": null,
-        "phone": { "country": null, "area": null, "number": null, "type": null },
-        "nationality": null,
+        "id": "ADT_1", "main": true, "name": "ANDY PETERSON",
+        "firstName": "ANDY", "lastName": "PETERSON",
+        "type": "adult", "ageGroup": "adult",
+        "dateOfBirth": "1990-04-21", "age": 36, "gender": null,
+        "email": null, "nationality": null,
         "document": { "type": null, "number": "AB123456" },
-        "birthdate": "1990-04-21",
-        "age": 36,
-        "type": "adult",
-        "ageGroup": "adult",
-        "gender": null,
-        "loyalty": null
+        "contact": null, "loyaltyProgram": null,
+        "tickets": [
+          { "ticketNumber": "045…", "type": "flight", "passengerId": "ADT_1",
+            "passengerName": null, "status": "issued", "providerStatus": "OK",
+            "issueDate": null, "amount": null }
+        ],
+        "infant": null
       }
     ],
-    "segments": [
-      {
-        "segmentId": "…",
-        "origin": "GRU",
-        "destination": "SCL",
-        "departure": "2026-10-20T08:15:00",
-        "arrival": "2026-10-20T11:10:00",
-        "duration": "PT3H55M",
-        "company": { "code": "LA", "number": "8070" },
-        "cabin": "Economy",
-        "aircraft": "320"
-      }
-    ],
-    "itinerary": null,
+    "segments": {
+      "departure": { "origin": { "iata": "GRU" }, "destination": { "iata": "SCL" }, "time": { "duration": 235 }, "stops": 0, "flights": [], "fare": { "bookingClass": "Q", "fareBasis": "Q00QP5ZI", "…": "…" } },
+      "return": { "…": "…" },
+      "journeys": [{ "…": "ida" }, { "…": "volta" }]
+    },
+    "contacts": [],
     "total": 1023.18
-  }
+  },
+  "meta": { "provider": "latam", "…": "…" }
 }
 ```
 
+> ⚠️ **Mudou.** Esta rota tinha um envelope próprio (`connector`, `booking`, `status: "found"`,
+> `message`). Foi removido — era uma exceção que obrigava quem consome a escrever um caminho especial
+> para uma rota só.
+
 | Campo | Origem / regra |
 |---|---|
-| `status` (topo) | sempre `"found"`. Qualquer outro caso é erro, no corpo de erro padrão |
-| `data.status` | `confirmed`, `pending` ou `cancelled`, pela precedência acima |
-| `data.expiresAt` | o **menor** `PaymentTimeLimitDateTime` entre os `OrderItem`: o prazo para pagar |
-| `data.provider.name` | ⚠️ é a **companhia** (`OwnerCode`, `LA`), não o provedor. O nome do campo engana |
-| `data.trip` | mais de um segmento → `roundtrip`; um → `oneway`; nenhum → `null`. É heurística: uma ida com conexão também aparece como `roundtrip` |
-| `data.people[].age` | calculada no momento da consulta |
-| `data.people[].type` | `ADT`→`adult`, `CHD`/`CNN`→`child`, `INF`→`infant`; desconhecido → `null` |
-| `data.segments` | vem do `PaxSegmentList`, com voo, horário, duração ISO-8601 e aeronave |
-| `data.total` | `Order/TotalPrice/TotalAmount` — é o valor que o `/issue` cobra |
+| `booking.status` | `confirmed`, `pending` ou `cancelled`, pela precedência abaixo |
+| `booking.timeLimit` | o **menor** `PaymentTimeLimitDateTime` entre os `OrderItem`: o prazo para pagar |
+| `booking.permissions` | derivadas do status. `null` é "não sabemos", **não** "não pode" |
+| `trip` | pela contagem de **journeys**, não de segmentos |
+| `segments.journeys` | a lista COMPLETA das pernas, do `PaxJourneyList` |
+| `passengers[].tickets` | `[]` é legítimo numa reserva não emitida |
+| `total` | `Order/TotalPrice/TotalAmount` — é o valor que o `/issue` cobra |
+
+**Precedência do status**, nesta ordem:
+
+1. **todos** os cupons do bilhete `VOID`/`V`/`REFUND`/`REFUNDED` → `cancelled`;
+2. status da ordem `CLOSED`/`CONFIRMED`/`TICKETED` → `confirmed`;
+3. `FAILED`/`REJECTED`/`CANCELLED` → `cancelled`;
+4. qualquer outro (inclusive `OPENED`) → `pending`.
 
 **Regras que importam**
 
 - 🔴 **Bilhete anulado continua `CLOSED` na LATAM.** Do lado dela, a ordem existe e está fechada.
-  Quem diz a verdade é o cupom (`TicketDocInfo/Ticket/Coupon/CouponStatusCode`), e por isso ele
-  vence o status da ordem.
-- `segments: []` significa "a companhia não informou nesta leitura", e não "sem voo".
+  Quem diz a verdade é o cupom, e por isso ele vence o status da ordem.
+- 🔴 **`trip` sai das journeys.** Uma ida com conexão tem dois segmentos e continua `oneway` — foi
+  essa confusão que fazia uma escala virar "ida e volta" na tela. O `PaxJourneyList` diz quais
+  segmentos formam cada perna, e estava sendo ignorado.
+- 🔴 **Em multidestino `departure` e `return` vêm `null`**, de propósito: eleger a primeira perna como
+  "ida" inventaria uma ida-e-volta que ninguém comprou. A viagem inteira está em `journeys`.
+- `journeys: []` significa "a companhia não informou nesta leitura", e não "sem voo".
 
 ---
 
@@ -961,14 +1045,8 @@ A LATAM só usa o `locator`.
 
 | | |
 |---|---|
-| Etapa na tela | 5 · Pagar |
 | Mensagem LATAM | `InstallmentOptionsRQ` (**não é NDC**) → `POST /ndc/v192/installments/options` |
 | Escreve? | não — só consulta |
-| Timeout / retry | 30 s / 1 |
-| Sandbox | ✅ de 1x a 8x sem juros |
-
-**Para que serve.** Dizer em quantas vezes aquele cartão pode pagar aquela reserva. Depende de
-bandeira e banco, por isso a pergunta leva o número do cartão.
 
 **Pedido**
 
@@ -976,19 +1054,10 @@ bandeira e banco, por isso a pergunta leva o número do cartão.
 {
   "options": { "provider": "latam" },
   "booking": { "locator": "LA9572806QCFT" },
-  "card": "4000000000002701"
+  "payment": { "creditCard": { "number": "4000000000002701" } },
+  "executionFlow": "PAYLATER"
 }
 ```
-
-`card` é o número do cartão, de 13 a 19 dígitos, sem espaços.
-
-**O que a API faz**
-
-1. Escolhe o provedor e confere se ele parcela (senão, 501).
-2. Envia `<InstallmentOptionsRQ>` **sem namespace**, com `Party`, `Pan`, `OrderId` e
-   `ExecutionFlow: PAYLATER` (ordem já criada, pagamento separado).
-3. Lê a raiz da resposta direto: ela não tem o nó `<Response>` das mensagens NDC.
-4. Descarta opções sem `InstallmentId`, porque é esse id que o pagamento usa.
 
 **Resposta**
 
@@ -1004,13 +1073,13 @@ bandeira e banco, por isso a pergunta leva o número do cartão.
       { "id": "…", "installments": 1, "installmentAmount": 1023.18, "total": 1023.18, "interestRate": 0, "promotional": false },
       { "id": "…", "installments": 8, "installmentAmount": 127.9, "total": 1023.18, "interestRate": 0, "promotional": false }
     ]
-  },
-  "meta": { "provider": "latam", "operation": "financingOptions", "…": "…" }
+  }
 }
 ```
 
 - `options: []` é resposta válida: o cartão pode não aceitar parcelamento.
-- Mande o `id` da opção escolhida como `installmentId` no `/issue`.
+- Mande o `id` da opção escolhida como `payment.installmentId` no `/issue`.
+- 🔴 A resposta **não é NDC**: `<InstallmentOptionsRS>` na raiz, sem `<Response>` dentro.
 - O número do cartão não volta na resposta e não é guardado. Veja a
   [nota sobre log](#dado-de-cartão-o-que-é-garantido-e-o-que-ainda-não-é).
 
@@ -1020,74 +1089,62 @@ bandeira e banco, por isso a pergunta leva o número do cartão.
 
 | | |
 |---|---|
-| Etapa na tela | 5 · Pagar |
-| Mensagens LATAM | `OrderRetrieve` (quanto cobrar) → `IATA_OrderChangeRQ` com `PaymentFunctions` → `POST /ndc/v192/order/change/payment` |
+| Mensagens LATAM | `OrderRetrieve` (quanto cobrar) → `IATA_OrderChangeRQ` com `PaymentFunctions` |
 | Escreve? | **sim — cobra o cartão** |
 | Timeout / retry | 90 s / **0** |
-| Sandbox | ✅ a ordem vai de `OPENED` para `CLOSED` |
-
-**Para que serve.** Pagar uma ordem que já existe e fechar a passagem. Não confundir com
-`/order/create/payment` da LATAM, que cria e paga numa chamada só: a API mantém reservar e pagar
-separados, porque a LATAM os separa.
 
 **Pedido**
 
 ```json
 {
   "options": { "provider": "latam" },
-  "booking": { "locator": "LA9572806QCFT" },
-  "card": {
-    "brand": "VI",
-    "holder": "ANDY PETERSON",
-    "number": "4000000000002701",
-    "securityCode": "737",
-    "expiration": "03/30"
-  },
-  "billing": {
-    "email": "andy@exemplo.com",
-    "countryCode": "BR",
-    "postalCode": "01310-100",
-    "street": "Av. Paulista, 1000"
-  },
-  "payer": {
-    "firstName": "Andy",
-    "lastName": "Peterson",
-    "dateOfBirth": "1990-04-21",
-    "documentNumber": "52998224725"
-  },
-  "amount": { "total": 1023.18, "currency": "BRL" },
-  "installmentId": "…"
+  "issue": {
+    "booking": { "locator": "LA9572806QCFT" },
+    "acceptFareChange": false,
+    "payment": {
+      "paymentMethod": "credit-card",
+      "billedAmount": 1023.18,
+      "currency": "BRL",
+      "installmentId": "…",
+      "creditCard": {
+        "brand": "VI",
+        "holderName": "ANDY PETERSON",
+        "number": "4000000000002701",
+        "cvv": "737",
+        "expiryDate": "03/2030",
+        "holderDocument": "52998224725",
+        "holderBirthDate": "1990-04-21",
+        "holderEmail": "andy@exemplo.com"
+      },
+      "billing": {
+        "email": "andy@exemplo.com",
+        "countryCode": "BR",
+        "postalCode": "01310-100",
+        "street": "Av. Paulista, 1000"
+      }
+    }
+  }
 }
 ```
 
 | Campo | Regra |
 |---|---|
-| `card.brand` | código IATA da bandeira: `VI`, `CA`, `AX`… |
-| `card.number` | 13 a 19 dígitos |
-| `card.securityCode` | 3 ou 4 dígitos |
-| `card.expiration` | `MM/AA` (a API converte para `MMAA`) |
+| `creditCard.expiryDate` | `MM/YYYY` ou `MM/YY`. 🔴 A API converte para `MMAA`; um `replace('/')` ingênuo produzia seis dígitos onde a companhia espera quatro, e a recusa não dizia por quê |
+| `creditCard.holderDocument` / `holderBirthDate` | **quem paga**, que pode não ser o passageiro. No Brasil o documento é o CPF. Sem eles a LATAM devolve `400113007 Payer is mandatory` — a API recusa antes, nomeando o campo |
 | `billing.*` | todos obrigatórios; vão como contato `BILLING` com endereço postal |
-| `payer.*` | **quem paga**, que pode não ser o passageiro. No Brasil, `documentNumber` é o CPF |
-| `amount` | **opcional**. Se vier, é tratado como o valor que você **espera** pagar |
-| `installmentId` | opcional; vem do `/financing-options` e vai no `PaymentTrx/TrxID` |
+| `billedAmount` | **opcional**. Se vier, é o valor que você **espera** pagar |
 
-Cartão de teste do sandbox (`operations/order-create-payment.md` do portal): `4000000000002701`,
-CVV `737`, validade `03/30`.
+Cartão de teste do sandbox: `4000000000002701`, CVV `737`, validade `03/2030`.
 
 **O que a API faz**
 
-1. Escolhe o provedor e confere se ele paga (senão, 501).
-2. 🔴 **Pergunta o total à LATAM** com um `OrderRetrieve`. O valor cobrado é o dela, **nunca** o do
-   corpo.
-3. A LATAM não informou total → `502 PROVIDER_INTEGRATION_ERROR` (`providerCode: NO_TOTAL`), e
-   **nada é cobrado**.
-4. Veio `amount` e ele difere do total da LATAM em mais de R$ 0,01 → `409 FARE_PRICE_CHANGED`, com
-   os dois valores em `details.errors.amount`, e **nada é cobrado**.
-5. Envia o `OrderChange` com `PaymentProcessingDetails`: valor, `Payer/Individual` (nome,
-   nascimento, CPF em `IndividualID`), `PaymentCard` e `TypeCode: Credit Card`. **Sem retry.**
-6. Lê a ordem: `CLOSED`/`CONFIRMED`/`TICKETED` → `issued`; qualquer outra coisa → `pending`.
-7. Lê os números de bilhete nos **dois** lugares em que a LATAM pode colocá-los.
-8. Registra no log só `locator` e `correlationId`.
+1. Confere se o provedor paga (senão, 501).
+2. 🔴 **Pergunta o total à LATAM** com um `OrderRetrieve`. O valor cobrado é o dela, **nunca** o do corpo.
+3. A LATAM não informou total → `502` (`providerCode: NO_TOTAL`), e **nada é cobrado**.
+4. Veio `billedAmount` e difere em mais de R$ 0,01 → `409 FARE_PRICE_CHANGED`, e **nada é cobrado**.
+5. Envia o `OrderChange` com `PaymentProcessingDetails`. **Sem retry.**
+6. Lê os números de bilhete nos **dois** lugares em que a LATAM pode colocá-los.
+7. Registra no log só `locator` e `correlationId`.
 
 **Resposta**
 
@@ -1097,31 +1154,40 @@ CVV `737`, validade `03/30`.
   "data": {
     "provider": "latam",
     "locator": "LA9572806QCFT",
-    "issued": true,
-    "status": "issued",
-    "rawStatus": "CLOSED",
-    "amount": { "total": 1023.18, "currency": "BRL" },
-    "tickets": ["045…"]
-  },
-  "meta": { "provider": "latam", "operation": "issue", "…": "…" }
+    "committed": true,
+    "confirmed": true,
+    "queued": false,
+    "amount": { "currency": "BRL", "total": 1023.18 },
+    "authorizationCode": "AUTH-…",
+    "tickets": [
+      { "ticketNumber": "045…", "type": "flight", "passengerId": "ADT_1",
+        "passengerName": null, "status": "issued", "providerStatus": "OK",
+        "issueDate": null, "amount": null }
+    ],
+    "emds": [],
+    "messages": [],
+    "providerStatus": "CLOSED"
+  }
 }
 ```
 
-**Regras que importam**
+🔴 **A prova de emissão é o NÚMERO DO BILHETE, não o status:**
 
-- 🔴 **Cobrar duas vezes é o pior erro possível.** Não repita o `/issue` se a resposta se perder:
-  consulte o `/retrieve` e veja se a ordem já está `confirmed`.
-- `issued: false` com `status: "pending"` quer dizer "aceito, ainda não fechado". Consulte, não
-  repita.
-- Sem `Payer` a LATAM responde `400113007 PaymentProcessingDetails.Payer is mandatory`.
-- `tickets` pode vir `[]` se o bilhete ainda não foi gerado no momento da resposta.
+| `confirmed` | Quando |
+|---|---|
+| `true` | há documento na mão |
+| `false` | a ordem fechou e **nenhum** documento veio — procuramos a prova e ela não estava lá |
+| `null` | a companhia ainda não fechou; a prova ainda não existe. Consulte o `/retrieve` |
+
+`tickets[]` e `emds[]` são listas **separadas**: documento de voo e de serviço têm ciclos de vida
+diferentes, e anular um não anula o outro.
 
 **Erros esperados**
 
 | Situação | Código | HTTP | Cobrou? |
 |---|---|---|---|
 | corpo inválido (cartão, validade, CPF ausente) | `SEARCH_VALIDATION_ERROR` | 400 | não |
-| `amount` diferente do total da LATAM | `FARE_PRICE_CHANGED` | 409 | não |
+| `billedAmount` diferente do total | `FARE_PRICE_CHANGED` | 409 | não |
 | a LATAM não informou o total | `PROVIDER_INTEGRATION_ERROR` | 502 | não |
 | operadora recusou (`409300032`) | `PAYMENT_DECLINED` | 409 | não |
 | ordem em estado que não aceita pagamento | `RESOURCE_CONFLICT` | 409 | não |
@@ -1133,14 +1199,8 @@ CVV `737`, validade `03/30`.
 
 | | |
 |---|---|
-| Etapa na tela | com a passagem paga → "Escolher assento e bagagem" |
 | Mensagens LATAM | `OrderRetrieve` (PaxIDs) → `SeatAvailability` com `CoreRequest/Order` |
 | Escreve? | não |
-| Timeout / retry | 30 s + 45 s / 1 em cada |
-| Sandbox | ✅ 279 assentos com ids `SEAT_…` |
-
-**Para que serve.** O catálogo de assentos de onde saem os **únicos** ids que a compra pós-emissão
-aceita.
 
 **Pedido**
 
@@ -1148,60 +1208,20 @@ aceita.
 { "options": { "provider": "latam" }, "booking": { "locator": "LA9572806QCFT" } }
 ```
 
-**O que a API faz**
+**Resposta** — a mesma forma do `/seat-map`, com `locator` preenchido, `fareId: null` e chaves que
+carregam os ids `SEAT_<hash>`.
 
-1. Busca os `PaxID` na própria reserva (`OrderRetrieve`), para quem chama não precisar repeti-los.
-   Sem passageiros na resposta, usa `ADT_1`.
-2. Pede o `SeatAvailability` endereçado por `Order/OrderID`.
-3. Normaliza com o mesmo normalizador do `/seat-map`.
-
-**Resposta** — a mesma forma do `/seat-map`, com `locator` a mais e `offerItemId` no formato
-`SEAT_<hash>`:
-
-```json
-{
-  "success": true,
-  "data": {
-    "provider": "latam",
-    "locator": "LA9572806QCFT",
-    "currency": "BRL",
-    "segments": [ { "segmentId": "…", "cabins": [ { "cabinClass": "…", "rows": [ { "number": "12", "exitRow": false, "seats": [ { "seat": "12C", "row": "12", "column": "C", "status": "F", "available": true, "paid": true, "price": { "total": 59.9, "currency": "BRL" }, "characteristic": "aisle", "offerItemId": "SEAT_086985c24476cd78fc16ee82e01fdd7d", "serviceId": "…" } ] } ] } ] } ]
-  },
-  "meta": { "provider": "latam", "operation": "seatMap", "…": "…" }
-}
-```
+A API busca os `PaxID` na própria reserva, para quem chama não precisar repeti-los.
 
 ---
 
 ## `POST /order-ancillaries` — opcionais da reserva (loja)
 
-| | |
-|---|---|
-| Mensagens LATAM | `OrderRetrieve` (PaxIDs) → `ServiceList` com `CoreRequest/Order` |
-| Escreve? | não |
-| Sandbox | ✅ 5 tipos de bagagem com ids `BAG_…` |
+Mesmo pedido do `/order-seat-map`; resposta na forma do `/ancillaries`, com `locator` preenchido e
+chaves que carregam os ids `BAG_<hash>`.
 
-**Pedido** — igual ao `/order-seat-map`.
-
-**Resposta**
-
-```json
-{
-  "success": true,
-  "data": {
-    "provider": "latam",
-    "locator": "LA9572806QCFT",
-    "ancillaries": [
-      { "offerItemId": "BAG_…", "serviceId": "…", "name": "…", "description": "…", "price": { "total": 180.0, "currency": "BRL" }, "paxId": "ADT_1", "segmentId": "…" }
-    ]
-  },
-  "meta": { "provider": "latam", "operation": "ancillaries", "…": "…" }
-}
-```
-
-- 🔴 O `ServiceList` endereçado pela ordem exige `Order/OrderItem/GrandTotalAmount` (a API manda `0`,
-  como a amostra da LATAM). Sem ele: `911 The content of element 'Order' is not complete`.
-- Assentos saem desta lista, como no `/ancillaries`.
+🔴 O `ServiceList` endereçado pela ordem exige `Order/OrderItem/GrandTotalAmount` (a API manda `0`,
+como a amostra da LATAM). Sem ele: `911 The content of element 'Order' is not complete`.
 
 ---
 
@@ -1209,54 +1229,53 @@ aceita.
 
 | | |
 |---|---|
-| Etapa na tela | com a passagem paga |
-| Mensagens LATAM | `OrderRetrieve` ×2 + `SeatAvailability` + `ServiceList` (em paralelo) → `IATA_OrderChangeRQ` **24.1** → `POST /ndc/v241/order/change` |
+| Mensagens LATAM | `OrderRetrieve` ×2 + `SeatAvailability` + `ServiceList` (em paralelo) → `IATA_OrderChangeRQ` **24.1** |
 | Escreve? | **sim — cobra o cartão** |
 | Timeout / retry | 120 s / **0** na compra |
 | Sandbox | ⚠️ pedido aceito em toda a validação; o sandbox **não autoriza** a cobrança |
-
-**Para que serve.** Adicionar assento e/ou bagagem a uma passagem **já paga**, cobrando à parte.
 
 **Pedido**
 
 ```json
 {
   "options": { "provider": "latam" },
-  "booking": { "locator": "LA9572806QCFT" },
-  "items": [
-    { "offerItemId": "SEAT_086985c24476cd78fc16ee82e01fdd7d", "paxId": "ADT_1", "row": "12", "column": "C" },
-    { "offerItemId": "BAG_…", "paxId": "ADT_1" }
-  ],
-  "card": { "brand": "VI", "holder": "ANDY PETERSON", "number": "4000000000002701", "securityCode": "737", "expiration": "03/30" },
-  "payer": { "firstName": "Andy", "lastName": "Peterson", "dateOfBirth": "1990-04-21", "documentNumber": "52998224725" }
+  "sellAncillaries": {
+    "booking": { "locator": "LA9572806QCFT" },
+    "items": [
+      { "key": "eyJvIjoiU0VBVF8…", "passengerId": "ADT_1", "segmentId": "SEG_1", "type": "seat", "row": "12", "column": "C" },
+      { "key": "eyJvIjoiQkFHX…", "passengerId": "ADT_1", "type": "baggage", "count": 1 }
+    ],
+    "payment": {
+      "creditCard": {
+        "brand": "VI", "holderName": "ANDY PETERSON", "number": "4000000000002701",
+        "cvv": "737", "expiryDate": "03/2030",
+        "holderDocument": "52998224725", "holderBirthDate": "1990-04-21"
+      }
+    }
+  }
 }
 ```
 
 | Campo | Regra |
 |---|---|
-| `items[]` | pelo menos 1 |
-| `items[].offerItemId` | **tem que vir do `/order-seat-map` ou do `/order-ancillaries` desta reserva** |
-| `items[].paxId` | a quem pertence (`ADT_1`…) |
+| `items[].key` | **tem que vir do `/order-seat-map` ou do `/order-ancillaries` desta reserva** |
+| `items[].passengerId` | a quem pertence (`ADT_1`…) |
 | `items[].row` / `column` | obrigatórios para assento |
-| `card`, `payer` | obrigatórios quando a soma é maior que zero |
+| `payment.creditCard` | obrigatório quando a soma é maior que zero |
 
-Não existe campo de valor: a API calcula.
+**Não existe campo de valor: a API calcula.**
 
 **O que a API faz**
 
-1. Escolhe o provedor e confere se ele vende opcionais (senão, 501).
-2. Lê **os dois catálogos da reserva em paralelo** e monta um índice `offerItemId → preço`. Assento
-   sem preço conta como cortesia, valor zero.
-3. Algum `offerItemId` fora do catálogo → `400 SEARCH_VALIDATION_ERROR` listando os ids, **antes**
-   de chamar a compra.
-4. Soma o total **a partir do catálogo**.
-5. Total > 0 sem `card`/`payer` → `400`.
-6. Total = 0 → paga por BSP (`SettlementPlan/PaymentTypeCode: CA`), sem cartão.
-7. Monta o `OrderChange` 24.1 no envelope EASD (dois namespaces, `easd:` nos filhos do topo), nesta
-   ordem: `easd:AugmentationPoint` com o CPF do titular (só no cartão), `easd:DistributionChain`,
-   `easd:PayloadAttributes` (`24.1`) e `easd:Request` com `AcceptSelectedQuotedOfferList` (cada item
-   com `OfferItemRefID`, `PaxRefID` e `SelectedSeat`) e `PaymentFunctions`. **Sem retry.**
-8. Lê a ordem devolvida e lista os serviços com assento, passageiro e status.
+1. Lê **os dois catálogos da reserva em paralelo** e monta um índice `key → preço`. Assento sem preço
+   conta como cortesia, valor zero.
+2. Alguma `key` fora do catálogo → `400` listando as chaves, **antes** de chamar a compra.
+3. Soma o total **a partir do catálogo**.
+4. Total > 0 sem cartão → `400`. Total = 0 → paga por BSP (`SettlementPlan/PaymentTypeCode: CA`).
+5. Monta o `OrderChange` 24.1 no envelope EASD (dois namespaces, `easd:` nos filhos do topo), nesta
+   ordem: `easd:AugmentationPoint` com o CPF do titular, `easd:DistributionChain`,
+   `easd:PayloadAttributes` (`24.1`) e `easd:Request`. **Sem retry.**
+6. Cruza o que foi **pedido** com o que a companhia devolveu.
 
 **Resposta**
 
@@ -1266,62 +1285,82 @@ Não existe campo de valor: a API calcula.
   "data": {
     "provider": "latam",
     "locator": "LA9572806QCFT",
+    "committed": true,
     "confirmed": true,
-    "status": "confirmed",
-    "rawStatus": "CLOSED",
-    "charged": { "total": 239.9, "currency": "BRL" },
-    "services": [
-      { "serviceId": "…", "name": "…", "paxId": "ADT_1", "segmentId": "…", "seat": "12C", "status": "…" }
+    "amount": { "currency": "BRL", "total": 239.9 },
+    "items": [
+      { "key": "eyJvIjoiU0VBVF8…", "passengerId": "ADT_1", "segmentId": "SEG_1",
+        "type": "seat", "name": "Assento 12C", "status": "booked",
+        "price": { "currency": "BRL", "total": 59.9 }, "emdNumber": null, "message": null }
     ],
-    "orderTotal": { "total": 1263.08, "currency": "BRL" }
-  },
-  "meta": { "provider": "latam", "operation": "sellAncillaries", "…": "…" }
+    "providerStatus": "CLOSED"
+  }
 }
 ```
+
+🔴 A resposta é montada a partir do que foi **pedido**, cruzada com o que a companhia devolveu.
+Publicar só o que ela devolveu esconderia um item que sumiu no caminho — e sumir em silêncio é o pior
+resultado possível numa operação que já cobrou o cartão. Item que não voltou sai com `status: failed`.
+
+🔴 `status: "booked"` é **pendente**: o serviço está confirmado na ordem e ainda não tem EMD. Só vira
+`issued` com número de documento. Quem lê `issued` sem EMD está lendo uma promessa como bilhete.
 
 **Regras que importam**
 
 - 🔴 **Dois catálogos, e só um compra.**
 
-  | Pergunta feita por | Rota | Formato do id | Serve para |
+  | Pergunta feita por | Rota | Id por dentro | Serve para |
   |---|---|---|---|
-  | oferta, antes de reservar | `/seat-map`, `/ancillaries` | `SEI\|…` | olhar; o id morre quando a passagem é emitida |
+  | oferta, antes de reservar | `/seat-map`, `/ancillaries` | `SEI\|…` | olhar; morre na emissão |
   | reserva, depois de pagar | `/order-seat-map`, `/order-ancillaries` | `SEAT_…`, `BAG_…` | **comprar** |
 
-  Usar o primeiro faz a LATAM responder `INVALID_OFFER_TYPES: Mixed type offers are not supported`.
-  E o prefixo `SEAT_`/`BAG_` é o que manda o pedido para o fluxo de opcionais: um id em outro
-  formato cai no fluxo de **troca de voo**. É por isso que a API recusa id desconhecido antes.
-- 🔴 **O CPF vai na raiz da mensagem**, como `easd:AugmentationPoint`, com
-  `IdentityDocTypeCode: I` (e não `CPF`, como diz a doc). Colocado dentro de `PaymentCard`,
-  `PaymentMethod`, `PaymentProcessingDetails`, no fim do `Request` ou na raiz sem prefixo, as cinco
-  tentativas deram `400300011 Required field is missing: AugmentationPoint`.
-- 🔴 **Não repita a compra** se a resposta se perder. Consulte o `/retrieve`.
-- **Onde parou no sandbox.** Com valor errado de propósito, a LATAM responde `400300005 Payment
-  amount does not match order total`: leu, entendeu e conferiu. Com o valor certo, responde
-  `409300032 Unsuccessful authorize`, na autorização da cobrança. Pagando por BSP, que não passa por
-  cartão, dá o mesmo. Conclusão: o pedido está correto e o ambiente de testes não autoriza cobrança
-  de opcional.
-
-**Erros esperados**
-
-| Situação | Código | HTTP |
-|---|---|---|
-| id fora do catálogo da reserva | `SEARCH_VALIDATION_ERROR` | 400 |
-| total > 0 sem cartão ou titular | `SEARCH_VALIDATION_ERROR` | 400 |
-| valor não bate (`400300005`) — o catálogo mudou | `FARE_PRICE_CHANGED` | 409 |
-| operadora recusou (`409300032`) | `PAYMENT_DECLINED` | 409 |
-| ordem ainda em processamento (`409123018`) | `RESOURCE_CONFLICT` | 409 |
+  Usar o primeiro faz a LATAM responder `INVALID_OFFER_TYPES: Mixed type offers are not supported`. E
+  o prefixo é o que roteia o pedido: um id em outro formato cai no fluxo de **troca de voo**.
+- 🔴 **O CPF vai na raiz da mensagem**, como `easd:AugmentationPoint`, com `IdentityDocTypeCode: I`
+  (e não `CPF`, como diz a doc). Cinco posições testadas até achar.
+- 🔴 **A chave carrega dois ids.** Sem `SelectedBundleServices/SelectedServiceRefID` a companhia
+  recusa com `400112165`, e o `ServiceID` não aparece no mapa de assentos — só no `ALaCarteOfferItem`.
+- **Onde parou no sandbox.** Com valor errado de propósito, a LATAM responde `400300005 Payment amount
+  does not match order total`: leu, entendeu e conferiu. Com o valor certo, responde
+  `409300032 Unsuccessful authorize`. Por BSP, idem. O pedido está correto; o ambiente de testes não
+  autoriza cobrança de opcional.
 
 ---
 
 ## `POST /mark-seats` — marcar assento
 
-Mesmo corpo, mesmo processamento e mesma resposta do
-[`/sell-ancillaries`](#post-sell-ancillaries--comprar-assento-e-bagagem).
+| | |
+|---|---|
+| Mensagens LATAM | `SeatAvailability` (pela ordem) → `OrderChange` 24.1 |
+| Escreve? | **sim — cobra o cartão** |
 
-A rota existe porque o contrato canônico a prevê. Na LATAM **marcar e comprar assento são a mesma
-operação**: o assento é confirmado no mesmo pedido em que é cobrado, e não existe segurá-lo sem
-pagar. A rota delega em vez de fingir uma etapa que não existe. 🔴 **Cobra o cartão.**
+**Pedido** — o assento é endereçado pelo **designador**, não pela chave do catálogo:
+
+```json
+{
+  "options": { "provider": "latam" },
+  "markSeats": {
+    "booking": { "locator": "LA9572806QCFT" },
+    "seats": [
+      { "passengerId": "ADT_1", "segmentId": "SEG_1", "seat": "12A" }
+    ],
+    "payment": { "method": "credit-card", "creditCard": { "…": "…" } },
+    "options": { "waiveRestrictedSeat": false, "waiveSeatFee": false }
+  }
+}
+```
+
+🔴 **A tradução acontece do lado de cá.** O contrato endereça pelo designador (`12A`) — o que a pessoa
+escolheu na tela — e a companhia vende por `OfferItemID`. A API relê o mapa da própria reserva e faz
+a ponte; deixar quem consome carregar a chave do catálogo transformaria "marcar o 12A" em duas
+chamadas e um acoplamento ao formato interno da LATAM.
+
+🔴 **Assento fora do mapa é recusado ANTES da rede**, com o designador nomeado: melhor não oferecer
+do que oferecer e falhar depois, porque o passageiro não tem como saber que o lugar já era de outro.
+
+Na LATAM **marcar e comprar assento são a mesma operação**: o assento é confirmado no mesmo pedido em
+que é cobrado. A resposta é a do
+[`/sell-ancillaries`](#post-sell-ancillaries--comprar-assento-e-bagagem).
 
 ---
 
@@ -1329,67 +1368,55 @@ pagar. A rota delega em vez de fingir uma etapa que não existe. 🔴 **Cobra o 
 
 | | |
 |---|---|
-| Etapa na tela | com a passagem paga |
-| Mensagens LATAM | `IATA_OrderReshopRQ` → `POST /ndc/v192/order/reshop`, depois `IATA_OrderCancelRQ` → `POST /ndc/v192/order/cancel` |
+| Mensagens LATAM | `IATA_OrderReshopRQ` → `IATA_OrderCancelRQ` |
 | Escreve? | **sim** |
 | Timeout / retry | reshop 45 s / 1 · cancel 45 s / **0** |
 | Sandbox | ✅ `VOID completed successfully`, cupom `V`, R$ 1.023,18 declarados como devolvidos |
 
-**Para que serve.** Cancelar uma passagem paga, por anulação (void) ou reembolso. **Quem decide qual
-dos dois é a LATAM.**
-
 **Pedido**
 
 ```json
-{ "options": { "provider": "latam" }, "booking": { "locator": "LA9572806QCFT" } }
+{
+  "options": { "provider": "latam" },
+  "cancel": {
+    "booking": { "locator": "LA9572806QCFT" },
+    "options": {
+      "reason": "Cliente solicitou cancelamento",
+      "refundType": "Refund",
+      "notifyContacts": "None",
+      "comments": ["Cancelamento solicitado pelo cliente final."]
+    }
+  }
+}
 ```
 
-**O que a API faz**
-
-1. Escolhe o provedor e confere se ele cancela (senão, 501).
-2. Pede o **`OrderReshop`**, que só calcula e não cancela nada.
-3. Se o reshop falhar, lê a ordem (`OrderRetrieve`) e olha os cupons. Todos anulados →
-   `409 BOOKING_ALREADY_CANCELLED`. Senão, repassa o erro original.
-4. Procura o valor do reembolso em `PriceDifferential` do tipo `Refund`, tentando três lugares em
-   ordem: `DiffPrice/Price/TotalAmount`, `DiffPrice/TotalAmount` e `GrandTotalAmount` (este último é
-   o que o sandbox devolve numa ordem paga).
-5. Procura `VOID` no `Desc/DescText` das ofertas do reshop.
-6. Nem valor nem void → `502 PROVIDER_INTEGRATION_ERROR` (`providerCode: NO_REFUND_QUOTE`), **sem
-   tentar cancelar**. Mandar zero significaria abrir mão do reembolso.
-7. Envia o **`OrderCancel`**, sem retry:
-   - void → só `Order/OrderID`;
-   - reembolso → `ExpectedRefundAmount/TotalAmount` com o valor do reshop.
-8. Decide o resultado: `cancelled` se a ordem voltar `FAILED`/`REJECTED`/`CANCELLED` **ou** se o
-   `OrderCancelProcessing/MarketingMessage` disser `completed`/`success`; senão, `pending`.
-9. Valor devolvido: o do reshop; no void, o de `TicketDocInfo/PaymentInfo/Amount`, **só** se
-   `PaymentStatusCode` for `REFUNDED`.
-
-**Resposta** — 🔴 os dados ficam em `data.data`:
+**Resposta** — 🔴 **plana agora**; o `data.data` foi removido:
 
 ```json
 {
   "success": true,
   "data": {
     "locator": "LA9572806QCFT",
-    "connector": "latam",
-    "data": {
-      "status": "cancelled",
-      "rawStatus": "VOID COMPLETED SUCCESSFULLY",
-      "cancelled": true,
-      "refund": { "total": 1023.18, "currency": "BRL" },
-      "provider": { "code": "latam", "locator": "LA9572806QCFT" }
-    }
-  },
-  "meta": { "provider": "latam", "operation": "cancelBooking", "…": "…" }
+    "status": "CANCELLED",
+    "outcome": "VOID",
+    "provider": "latam",
+    "cancelledAt": "2026-09-11T14:04:00.000Z",
+    "message": null,
+    "eticketsCancelled": true,
+    "refund": { "amount": 1023.18, "currency": "BRL", "status": "REQUESTED" },
+    "tickets": [],
+    "providerStatus": "VOID COMPLETED SUCCESSFULLY"
+  }
 }
 ```
 
 | Campo | Significado |
 |---|---|
-| `cancelled` | `true` só quando a LATAM confirma |
-| `status: "pending"` | aceito, ainda não fechado. **Não** repita: consulte o `/retrieve` |
-| `refund` | o valor que a LATAM **declarou** que devolve. `null` = ela não disse |
-| `rawStatus` | status da ordem ou, no void, a mensagem da LATAM em maiúsculas |
+| `status` | `CANCELLED` ou `PENDING`. Recusa de verdade vira erro HTTP, não status |
+| `outcome` | 🔴 **o EFEITO, que não é o status.** `VOID` anula o bilhete e não devolve dinheiro; `REFUND` devolve. Quem atende o passageiro precisa dos dois |
+| `eticketsCancelled` | `false` até o **cupom** provar o contrário — o RS de sucesso não diz nada sobre documento |
+| `refund.status` | `REQUESTED`: pedido aceito, **não** liquidação financeira |
+| `refund.amount` | `amount`, não `total`: é o vocabulário do modelo nesta rota |
 
 **Duas formas de cancelar**
 
@@ -1400,48 +1427,43 @@ dos dois é a LATAM.**
 
 **Regras que importam**
 
+- 🔴 **O `OrderReshop` não é opcional.** O `OrderCancel` exige `ExpectedRefundAmount`, e o valor sai
+  dele. Nem valor nem void → `502` (`NO_REFUND_QUOTE`), **sem tentar cancelar**: mandar zero
+  significaria abrir mão do reembolso.
 - 🔴 **Antes de pagar não há o que cancelar.** A ordem `OPENED` expira sozinha, e a LATAM recusa com
-  `400107002 Invalid order current status` → `409 RESOURCE_CONFLICT`. Por isso o botão só aparece
-  depois do pagamento.
+  `400107002 Invalid order current status` → `409`.
 - 🔴 **O mesmo código significa duas coisas opostas.** `400107002` é "ainda não paga" **e** "já
-  cancelada". A API desempata lendo o cupom e responde `BOOKING_ALREADY_CANCELLED` quando for o
-  segundo caso. O `933` também é reaproveitado, e o texto da mensagem desempata.
-- 🔴 **Depois do void, a ordem continua `CLOSED`** na LATAM. O `/retrieve` publica `cancelled`
-  porque lê o cupom.
-
-**Erros esperados**
-
-| Situação | Código | HTTP |
-|---|---|---|
-| ordem não paga | `RESOURCE_CONFLICT` | 409 |
-| já cancelada | `BOOKING_ALREADY_CANCELLED` | 409 |
-| reshop sem valor e sem void | `PROVIDER_INTEGRATION_ERROR` | 502 |
-| timeout no cancel | `PROVIDER_TIMEOUT` | 504 — **não se sabe** → `/retrieve` |
+  cancelada". A API desempata lendo o cupom e responde `BOOKING_ALREADY_CANCELLED` no segundo caso.
+- 🔴 **Depois do void, a ordem continua `CLOSED`.** O `/retrieve` publica `cancelled` porque lê o cupom.
+- 🔴 **O void não devolve `StatusCode`**: confirma em texto, num `MarketingMessage`. A leitura é
+  estrita — só `completed`/`success` contam; qualquer outro texto vira `PENDING`, e pendente manda
+  consultar em vez de afirmar o que não foi dito.
 
 ---
 
 ## Rotas que respondem 501
 
-Existem no contrato; a LATAM não atende **nesta API**. Respondem `501 CAPABILITY_NOT_SUPPORTED` no
+Existem no contrato; não são atendidas **nesta API**. Respondem `501 CAPABILITY_NOT_SUPPORTED` no
 corpo de erro padrão, e nunca um formato alternativo ou XML cru.
 
-| Rota | Por quê |
-|---|---|
-| `POST /fare-rules` | a NDC devolve penalidade **estruturada** (já publicada em `fares[].rules` na busca), e não o texto integral da tarifa que a rota exige. Inventar uma seção a partir disso seria publicar como condição algo que não é |
-| `DELETE /remove-seats` | existe na NDC; não integrado |
-| `POST /payment-options` | existe na NDC; não integrado |
-| `POST /retrieve-eticket` | existe na NDC; não integrado. O bilhete da tela é montado com o `/retrieve` |
-| `POST /cancel-eticket` | existe na NDC; não integrado. Anular bilhete está coberto pelo `/cancel-booking` |
+⚠️ A distinção que mais importa: **"a companhia não faz" é diferente de "ainda não integramos".**
 
-Com `PROVIDERS=latam`, o 501 sai do **guard**, antes de validar o corpo. Com a Travelfusion também
-ligada, `/fare-rules` passa pelo guard (a Travelfusion declara que faz) e o 501 sai do caso de uso,
-depois de abrir a chave: o provedor vem do `identifier`.
+| Rota | Por quê | De quem é a dívida |
+|---|---|---|
+| `POST /fare-rules` | a NDC devolve penalidade **estruturada** (já publicada em `fares[].rules`), e não o texto integral da tarifa que a rota exige. Inventar uma seção a partir disso seria publicar como condição algo que não é | da companhia |
+| `DELETE /remove-seats` | existe na NDC (`OrderChange` com oferta `SEAT_`); não ligado a esta rota. O método recomendado é `POST`; `DELETE` com corpo é compatibilidade deprecated | **nossa** |
+| `POST /payment-options` | rota da plataforma, que lista formas de pagamento de consolidadores. A LATAM não é exposta aqui; para parcelas, use `/financing-options` | não se aplica |
+| `POST /retrieve-eticket` | existe na NDC; não integrado. Enquanto isso o `/retrieve` já devolve os documentos em `passengers[].tickets` | **nossa** |
+| `POST /cancel-eticket` | existe na NDC; não integrado. Não confundir com `/cancel-booking`: void anula o bilhete, cancelar a order pode envolver reembolso | **nossa** |
+
+Com `PROVIDERS=latam`, o 501 sai do **guard**, antes de validar o corpo.
 
 ---
 
 ## Dado de cartão: o que é garantido e o que ainda não é
 
-Passa por `/financing-options` (número), `/issue` e `/sell-ancillaries` (número, CVV, validade).
+Passa por `/financing-options` (número), `/issue`, `/sell-ancillaries` e `/mark-seats` (número, CVV,
+validade).
 
 **Garantido pelo código hoje**
 
@@ -1463,19 +1485,12 @@ PCI-DSS, ou exige tokenização do cartão antes de chegar aqui.
 
 ---
 
-## Onde o Swagger ainda não reflete este documento
+## O que ainda não reflete este documento
 
-O Swagger (`/docs`) é gerado das anotações no código, e várias descrições são da época da Travelfusion:
+| Onde | O que falta |
+|---|---|
+| tela de busca | multidestino ficou fora do formulário: a API atende, a barra só descreve um par origem-destino |
+| `international` | sempre `false` — não há tabela IATA → país, e a API não adivinha |
 
-| Rota | O Swagger diz | Com a LATAM é |
-|---|---|---|
-| `/availability` | `StartRouting` + polling de `CheckRouting` | `AirShopping` síncrono |
-| `/quote` | `ProcessDetails` | `OfferPrice` |
-| `/booking` | `ProcessTerms` → `StartBooking` → `CheckBooking` | `OrderCreate` |
-| `/retrieve` | `CheckBooking`, trechos `null` | `OrderRetrieve`, com trechos |
-| `/ping` | `Login` | token OAuth2 |
-| título e descrição geral | "Travelfusion — API de voo" | multi-provedor, LATAM em foco |
-| tag "Não suportado pelo provedor" | textos da Travelfusion | ver [Rotas que respondem 501](#rotas-que-respondem-501) |
-
-Os **schemas** de pedido e resposta do Swagger estão corretos, porque saem dos DTOs. Só as descrições
-estão atrasadas. Para a LATAM, a referência é este arquivo.
+O **Swagger** (`/docs`) está alinhado: os schemas saem dos DTOs e as descrições foram reescritas para
+a LATAM.

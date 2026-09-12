@@ -38,7 +38,7 @@ Se sobrar só um minuto, é isto:
 - [ ] **`PROVIDERS=latam`** no `.env`. Com a Travelfusion ligada, a busca também chama a Travelfusion,
       que falha por IP não liberado. O stream segue, mas aparece um `provider_error` no meio da demo
       que você vai ter que explicar.
-- [ ] `cd api && npm install && npm test` → **67 testes verdes**. Guarde o print.
+- [ ] `cd api && npm install && npm test` → **80 testes verdes**. Guarde o print.
 - [ ] `cd api && npm run dev` → API na porta 3010, Swagger em `http://localhost:3010/docs`.
 - [ ] `cd web && npm install && npm run dev` → tela na porta 5173.
 - [ ] `/ping` com `{"options":{"provider":"latam"},"ping":{"environment":"sandbox","credentials":{"k":"v"}}}`
@@ -190,7 +190,7 @@ Ver a [seção 7](#7-o-que-falta-para-produção). Cite os três primeiros.
 | a busca volta `401` | credencial ou `.env`. Mostre que a API **explica** o que falta em `providerError.providerMessage`, sem sair para a rede |
 | a busca volta `403122004`, `403122009`, `403122010` ou `403122003` | identidade da agência no `.env` (tabela no README). Troque para os prints |
 | a tarifa esgota entre busca e revisão | **aproveite**: "é exatamente para isso que o `/quote` existe" |
-| nada funciona | rode `npm test` ao vivo: são 67 testes, 15 deles exercitando o provedor inteiro contra o dublê do NDC |
+| nada funciona | rode `npm test` ao vivo: são 80 testes, 18 deles exercitando o provedor inteiro contra o dublê do NDC |
 
 ---
 
@@ -278,10 +278,15 @@ e Swagger saem do mesmo DTO. Detalhes em [`../stack.md`](../stack.md).
 Não tem banco. O estado da reserva mora na LATAM, e a API pergunta sempre que precisa. O que precisa
 atravessar passos (qual oferta, quais passageiros) viaja dentro do `identifier` opaco.
 
-**O que tem dentro do `identifier`?**
+**O que tem dentro do `fareId`?**
 Um JSON em base64url com provedor, `OfferID`, `PaxJourneyID`, `OfferItemID`, direção e a lista de
 passageiros da busca. Quem consome não lê nem monta; ele existe para a API voltar à mesma oferta sem
 guardar nada.
+
+**Por que a chave fica na tarifa e não no trecho?**
+Porque um voo tem várias famílias tarifárias e **cada uma é uma venda diferente**. O `identifier` do
+trecho é a journey da companhia (`JOURNEY_1`); quem segue para tarifar, reservar e comprar assento é
+`fares[].fareId`. Enquanto os dois eram o mesmo campo, escolher "o voo das 8h" era ambíguo.
 
 **Por que a oferta é o par ida + volta, e não trechos soltos?**
 Porque a LATAM declara a combinação dentro do mesmo `OfferID`. Montar pares por conta própria
@@ -378,9 +383,9 @@ ser cortado em 400 caracteres. O XML cru nunca vai para o corpo.
 ### Qualidade, testes e operação
 
 **Quantos testes, e o que cobrem?**
-67. `contract.spec.ts` (23) cobre as regras do contrato. `latam.spec.ts` (29) testa o normalizador
+80. `contract.spec.ts` (23) cobre as regras do contrato. `latam.spec.ts` (39) testa o normalizador
 contra uma resposta **real** de 433 KB do portal, e pula sozinho se a amostra não estiver presente,
-porque ela fica fora do git. `latam.integration.spec.ts` (15) roda o provedor inteiro contra o dublê
+porque ela fica fora do git. `latam.integration.spec.ts` (18) roda o provedor inteiro contra o dublê
 do NDC.
 
 **Por que não existe modo mock para rodar a API sem credencial?**
@@ -400,8 +405,10 @@ A API não guarda estado de negócio. O que é por instância: o cache do token 
 seu, o que é aceitável) e o limite de 10 `/ping` por minuto, que viraria contador compartilhado.
 
 **O Swagger está atualizado?**
-Os schemas de pedido e resposta sim, porque saem dos DTOs. Algumas **descrições** ainda falam da
-Travelfusion (`ProcessDetails`, `CheckBooking`…). A referência da LATAM é o `rotas.md`.
+Sim. Os schemas saem dos DTOs, e as descrições foram reescritas para a LATAM — antes falavam de
+`ProcessDetails` e `CheckBooking`, que são mensagens da Travelfusion. A tag "Não suportado pelo
+provedor" hoje lista só as quatro rotas que de fato respondem 501, e distingue "a companhia não faz"
+de "ainda não integramos". A referência completa continua sendo o `rotas.md`.
 
 ### Front-end
 
@@ -427,7 +434,7 @@ Em ordem de prioridade:
 2. **Autenticação na API e CORS restrito.**
 3. **PCI-DSS ou tokenização** do cartão antes de chegar à API.
 4. **App de produção na LATAM** e identidade de agência real da Pass.
-5. **Descrições do Swagger** atualizadas para a LATAM.
+5. **Multidestino na tela de busca**: a API atende, o formulário só descreve um par origem-destino.
 6. **Compra de opcional** validada num ambiente que autorize a cobrança.
 7. Rotas 501 que a NDC oferece: `remove-seats`, `payment-options`, `retrieve-eticket`,
    `cancel-eticket`.

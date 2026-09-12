@@ -88,9 +88,13 @@ diferentes, o que confunde em vez de informar.
 
 Puramente visual. Você clica no voo e na tarifa. Nada é enviado para a companhia ainda.
 
-O único cuidado aqui: cada oferta carrega um **código opaco** (um texto enorme e sem sentido
+O único cuidado aqui: cada **tarifa** carrega um **código opaco** (um texto enorme e sem sentido
 aparente). Ele é copiado e devolvido intacto, nunca remontado ou interpretado. É a chave que a
 companhia usa para saber exatamente de qual oferta você está falando.
+
+Repare que o código é da **tarifa**, não do voo. O mesmo voo aparece com cinco tarifas diferentes, e
+cada uma é uma venda diferente: escolher "o voo das 8h" não basta, é preciso dizer qual das cinco. É
+por isso que a chave mora ali, e não no trecho.
 
 ---
 

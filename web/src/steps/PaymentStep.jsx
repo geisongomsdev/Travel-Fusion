@@ -11,8 +11,8 @@ import { cn, formatMoney } from '@/lib/utils';
  *
  * 🔴 O TOTAL NÃO É DIGITADO NEM ESCOLHIDO AQUI. Ele vem do `/retrieve`, que
  * pergunta à companhia quanto custa. A tela mostra o número; quem decide é a
- * LATAM. Foi de propósito: um total vindo do navegador é um total que dá para
- * mexer.
+ * companhia. Foi de propósito: um total vindo do navegador é um total que dá
+ * para mexer.
  *
  * 🔴 Nada de cartão fica nesta tela depois do envio, e nada volta na resposta.
  */
@@ -34,13 +34,13 @@ export function PaymentStep({
 }) {
   const [card, setCard] = useState({
     brand: 'VI',
-    holder: 'ANDY PETERSON',
     number: '4000000000002701',
-    securityCode: '737',
-    expiration: '03/30',
+    cvv: '737',
+    expiryDate: '03/2030',
   });
 
-  const [payer, setPayer] = useState({
+  /** Quem PAGA pode não ser quem viaja — e no Brasil o CPF é do titular. */
+  const [holder, setHolder] = useState({
     firstName: 'Andy',
     lastName: 'Peterson',
     dateOfBirth: '1990-04-21',
@@ -60,7 +60,7 @@ export function PaymentStep({
     setter((prev) => ({ ...prev, [key]: event.target.value }));
 
   const updateCard = update(setCard);
-  const updatePayer = update(setPayer);
+  const updateHolder = update(setHolder);
   const updateBilling = update(setBilling);
 
   if (issued) {
@@ -80,7 +80,22 @@ export function PaymentStep({
 
   const submit = (event) => {
     event.preventDefault();
-    onPay({ card, payer, billing, installmentId: chosen?.id ?? null });
+    onPay({
+      /**
+       * O cartão no vocabulário do contrato. O titular viaja DENTRO dele:
+       * a companhia exige CPF e nascimento do pagador, e a API recusa antes da
+       * rede quando faltam.
+       */
+      creditCard: {
+        ...card,
+        holderName: `${holder.firstName} ${holder.lastName}`.trim(),
+        holderDocument: holder.documentNumber,
+        holderBirthDate: holder.dateOfBirth,
+        holderEmail: billing.email,
+      },
+      billing,
+      installmentId: chosen?.id ?? null,
+    });
   };
 
   return (
@@ -106,27 +121,27 @@ export function PaymentStep({
                   onChange={updateCard('number')}
                 />
               </div>
-              <div className="space-y-1.5 sm:col-span-2">
-                <Label htmlFor="holder">Nome impresso no cartão</Label>
-                <Input id="holder" autoComplete="off" value={card.holder} onChange={updateCard('holder')} />
-              </div>
               <div className="space-y-1.5">
-                <Label htmlFor="expiration">Validade</Label>
-                <Input id="expiration" placeholder="MM/AA" value={card.expiration} onChange={updateCard('expiration')} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="securityCode">Código de segurança</Label>
+                <Label htmlFor="expiryDate">Validade</Label>
                 <Input
-                  id="securityCode"
+                  id="expiryDate"
+                  placeholder="MM/AAAA"
+                  value={card.expiryDate}
+                  onChange={updateCard('expiryDate')}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="cvv">Código de segurança</Label>
+                <Input
+                  id="cvv"
                   inputMode="numeric"
                   autoComplete="off"
-                  value={card.securityCode}
-                  onChange={updateCard('securityCode')}
+                  value={card.cvv}
+                  onChange={updateCard('cvv')}
                 />
               </div>
             </div>
 
-            {/* Quem paga pode não ser quem viaja — e no Brasil o CPF é do titular. */}
             <div className="space-y-4 border-t pt-6">
               <div>
                 <p className="text-sm font-medium">Titular do cartão</p>
@@ -136,20 +151,30 @@ export function PaymentStep({
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="payerFirst">Nome</Label>
-                  <Input id="payerFirst" value={payer.firstName} onChange={updatePayer('firstName')} />
+                  <Label htmlFor="holderFirst">Nome</Label>
+                  <Input id="holderFirst" value={holder.firstName} onChange={updateHolder('firstName')} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="payerLast">Sobrenome</Label>
-                  <Input id="payerLast" value={payer.lastName} onChange={updatePayer('lastName')} />
+                  <Label htmlFor="holderLast">Sobrenome</Label>
+                  <Input id="holderLast" value={holder.lastName} onChange={updateHolder('lastName')} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="payerDoc">CPF</Label>
-                  <Input id="payerDoc" inputMode="numeric" value={payer.documentNumber} onChange={updatePayer('documentNumber')} />
+                  <Label htmlFor="holderDoc">CPF</Label>
+                  <Input
+                    id="holderDoc"
+                    inputMode="numeric"
+                    value={holder.documentNumber}
+                    onChange={updateHolder('documentNumber')}
+                  />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="payerBirth">Data de nascimento</Label>
-                  <Input id="payerBirth" type="date" value={payer.dateOfBirth} onChange={updatePayer('dateOfBirth')} />
+                  <Label htmlFor="holderBirth">Data de nascimento</Label>
+                  <Input
+                    id="holderBirth"
+                    type="date"
+                    value={holder.dateOfBirth}
+                    onChange={updateHolder('dateOfBirth')}
+                  />
                 </div>
               </div>
             </div>
@@ -243,7 +268,7 @@ function Installments({ options, loading, chosen, amount, currency, onLoad, onCh
                 </p>
                 <p className="text-xs text-muted-foreground tabular-nums">
                   {/* Juros zero é o caso comum aqui, e vale dizer com todas as letras. */}
-                  {option.interestRate ? `com juros · ` : 'sem juros · '}
+                  {option.interestRate ? 'com juros · ' : 'sem juros · '}
                   {formatMoney(option.total ?? amount, currency)}
                 </p>
               </button>
@@ -258,8 +283,9 @@ function Installments({ options, loading, chosen, amount, currency, onLoad, onCh
 /**
  * Passagem paga.
  *
- * 🔴 `pending` NÃO é emitido: o bilhete só existe no status final, e enquanto a
- * companhia não fecha a cobrança a tela não promete passagem.
+ * 🔴 A PROVA da emissão é o número do bilhete, não o status. `confirmed: null`
+ * quer dizer que a companhia ainda não fechou e a prova não existe — a tela diz
+ * "em processamento", e não promete passagem.
  *
  * 🔴 É AQUI que aparece cancelar, e não na tela da reserva. Antes de pagar não
  * há o que cancelar: a reserva não paga expira sozinha no prazo, e a companhia
@@ -267,8 +293,8 @@ function Installments({ options, loading, chosen, amount, currency, onLoad, onCh
  * falha é pior do que não oferecer.
  */
 function PaymentResult({ issued, running, cancellation, onShowExtras, onVoucher, onCancel, children }) {
-  const cancelled = Boolean(cancellation?.cancelled);
-  const done = issued.issued;
+  const cancelled = cancellation?.status === 'CANCELLED';
+  const done = issued.confirmed === true;
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
@@ -294,7 +320,7 @@ function PaymentResult({ issued, running, cancellation, onShowExtras, onVoucher,
               <p className="text-sm text-muted-foreground">
                 {cancelled
                   ? cancellation?.refund
-                    ? `A companhia confirmou o cancelamento e devolve ${formatMoney(cancellation.refund.total, cancellation.refund.currency)}.`
+                    ? `A companhia confirmou o cancelamento e devolve ${formatMoney(cancellation.refund.amount, cancellation.refund.currency)}.`
                     : 'A companhia confirmou o cancelamento.'
                   : done
                     ? 'Está tudo certo. Dá para escolher assento e bagagem mesmo com a passagem já emitida.'
@@ -313,8 +339,10 @@ function PaymentResult({ issued, running, cancellation, onShowExtras, onVoucher,
             {issued.tickets?.length > 0 && (
               <div className="min-w-[9rem] flex-1 rounded-lg border px-4 py-3">
                 <p className="text-xs text-muted-foreground">Bilhete</p>
-                {issued.tickets.map((ticket) => (
-                  <p key={ticket} className="font-mono text-sm">{ticket}</p>
+                {issued.tickets.map((ticket, index) => (
+                  <p key={ticket.ticketNumber ?? index} className="font-mono text-sm">
+                    {ticket.ticketNumber}
+                  </p>
                 ))}
               </div>
             )}

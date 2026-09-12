@@ -1,13 +1,21 @@
 import { encodeOfferKey } from '../../../../common/utils/offer-key';
 import { roundMoney } from '../../../../common/utils/money';
+import { flightDuration } from '../../../../common/utils/duration';
 import { PROVIDER } from '../../../../config/env';
 import {
-  Airport, Cabin, Fare, FarePrice, FareRulesInfo, FlightTime, Leg, PassengerPrice, Segment,
+  Airport, Cabin, Equipment, Fare, FarePrice, FareRulesInfo, FlightTime, Leg, PassengerPrice, Segment,
 } from '../../../flight/flight.types';
 import { asList, bool, num, text, XmlNode } from '../../../../common/xml/xml.util';
 
 /**
- * Cabine canônica — 01-convencoes.md §6.
+ * ⚠️ Provedor ARQUIVADO. A Travelfusion está bloqueada por liberação de IP e
+ * fora do escopo atual — este arquivo acompanha o vocabulário canônico para
+ * continuar compilando e correto, mas não recebe trabalho novo. O foco é a
+ * LATAM; ver `docs/travelfusion/README.md`.
+ */
+
+/**
+ * Cabine canônica.
  *
  * 🔴 Rótulo desconhecido vira `null`, nunca o texto cru do fornecedor. Publicar
  * o rótulo dele faria uma busca por econômica casar com oferta de outra cabine.
@@ -24,10 +32,21 @@ export function canonicalCabin(value: string | null | undefined): Cabin | null {
   return CABIN_MAP[value.toLowerCase().replace(/[\s_-]/g, '')] ?? null;
 }
 
-const airport = (code: string | null, name: string | null = null): Airport | null =>
-  code ? { code: code.toUpperCase(), name } : null;
+/** Cidade e coordenadas são enriquecimento externo — `null`, nunca palpite. */
+const airport = (code: string | null, city: string | null = null): Airport | null =>
+  code
+    ? { iata: code.toUpperCase(), city, terminal: null, coordinates: { lat: null, lng: null } }
+    : null;
 
-const flightTime = (departure: string | null, arrival: string | null): FlightTime => ({ departure, arrival });
+const flightTime = (departure: string | null, arrival: string | null): FlightTime => ({
+  departure,
+  arrival,
+  // A Travelfusion não declara duração; só resta a diferença entre as pontas.
+  duration: flightDuration(null, departure, arrival),
+});
+
+const equipmentOf = (code: string | null, name: string | null): Equipment | null =>
+  code || name ? { code, name, description: null } : null;
 
 function normalizeSegment(node: XmlNode, index: number): Segment {
   const source = node as Record<string, any>;
@@ -45,11 +64,7 @@ function normalizeSegment(node: XmlNode, index: number): Segment {
     number: text(source?.FlightNumber),
     segment: index,
     connection: index > 0,
-    equipment: {
-      code: text(source?.AircraftCode),
-      name: text(source?.AircraftName),
-      description: null,
-    },
+    equipment: equipmentOf(text(source?.AircraftCode), text(source?.AircraftName)),
     cabin: canonicalCabin(text(source?.CabinClass)),
   };
 }
@@ -59,23 +74,24 @@ function passengerPrice(node: XmlNode, currency: string): PassengerPrice | null 
   const base = num(source?.BaseFare);
   if (base === null) return null;
 
-  const taxes = { boarding: num(source?.Tax) ?? 0, service: 0, fuel: 0, baggage: 0 };
+  const tax = num(source?.Tax) ?? 0;
   const fees = num(source?.Fee) ?? 0;
 
   return {
     base: roundMoney(base),
-    taxes,
+    // A Travelfusion manda o total de impostos, sem discriminar a natureza.
+    taxes: { boarding: null, service: null, fuel: null, baggage: null, total: roundMoney(tax) },
     fees: roundMoney(fees),
-    total: roundMoney(base + taxes.boarding + fees),
+    total: roundMoney(base + tax + fees),
     currency,
   };
 }
 
 /**
- * FareRules — 01-convencoes.md §6. As duas formas da multa (lista e objetos por
- * tipo) convivem de propósito: a que vier preenchida alimenta a vazia. A
- * Travelfusion não estrutura multa, então as duas ficam vazias e o que sobra é a
- * `key` — o texto integral vem depois, pelo /fare-rules.
+ * FareRules. As duas formas da multa (lista e objetos por tipo) convivem de
+ * propósito: a que vier preenchida alimenta a vazia. A Travelfusion não
+ * estrutura multa, então as duas ficam vazias e o que sobra é a `key` — o texto
+ * integral vem depois, pelo /fare-rules.
  */
 function buildFareRules(route: Record<string, any>, routingId: string, outwardId: string | null): FareRulesInfo {
   return {
@@ -97,6 +113,8 @@ function normalizeFare(
   passengerCount: number,
   routingId: string,
   outwardId: string | null,
+  returnId: string | null,
+  direction: 'outward' | 'return',
 ): Fare {
   const currency = text(route?.Currency) ?? 'BRL';
   const base = num(route?.BaseFare) ?? 0;
@@ -116,20 +134,22 @@ function normalizeFare(
     baby: hasBreakdown ? baby : null,
     total: {
       base: roundMoney(base),
-      taxes: { boarding: roundMoney(tax) ?? 0, service: 0, fuel: 0, baggage: 0 },
+      taxes: { boarding: null, service: null, fuel: null, baggage: null, total: roundMoney(tax) },
       fees: roundMoney(fee),
       total: roundMoney(total),
       currency,
     },
     perPassenger: roundMoney(total / Math.max(1, passengerCount)),
     net: null,
-    exchange: null,
   };
 
   return {
-    // A Travelfusion não identifica a tarifa separadamente do routing — quem
-    // endereça é o `identifier` do trecho.
-    fareId: null,
+    /**
+     * 🔴 A chave de VENDA é da tarifa, não do trecho. A Travelfusion não
+     * identifica a tarifa separadamente do routing, então a chave carrega o
+     * `RoutingId` mais os ids de perna — que é o que o ProcessDetails exige.
+     */
+    fareId: encodeOfferKey({ p: PROVIDER, r: routingId, o: outwardId, i: returnId, d: direction }),
     code: text(route?.FareCode),
     familyCode: text(route?.FareFamilyCode),
     family: text(route?.FareFamily),
@@ -139,12 +159,11 @@ function normalizeFare(
     seats: num(route?.SeatsRemaining),
     price,
     fees: [],
-    baggage: { included: null, quantity: null, weight: null, unit: null },
+    // O agregador não estrutura franquia na busca: ela sai no /quote, em
+    // requiredParameters. `null` nos dois nós = não informado.
+    baggage: { hand: null, hold: null },
     rules: buildFareRules(route, routingId, outwardId),
-    benefits: {
-      seatSelection: null, checkedBaggage: null, carryOn: null, meal: null,
-      loyaltyPoints: null, priorityBoarding: null, refund: null, change: null,
-    },
+    benefits: null,
   };
 }
 
@@ -159,8 +178,8 @@ export interface NormalizeOptions {
  * Um `<Route>` da Travelfusion vira UM trecho canônico.
  *
  * 🔴 A Travelfusion DECLARA a combinabilidade: `RoutingId` + `OutwardId`/`ReturnId`
- * cobrem o itinerário inteiro. Isso a classifica como provedor de PACOTE
- * (04-availability-formatos.md §2) — nunca parear pernas por conta própria.
+ * cobrem o itinerário inteiro. Isso a classifica como provedor de PACOTE —
+ * nunca parear pernas por conta própria.
  */
 export function normalizeLeg(route: Record<string, any>, options: NormalizeOptions): Leg {
   const segmentSource = options.direction === 'return'
@@ -174,23 +193,27 @@ export function normalizeLeg(route: Record<string, any>, options: NormalizeOptio
   const outwardId = text(route?.OutwardId) ?? text(route?.Id);
   const returnId = text(route?.ReturnId);
 
-  const identifier = encodeOfferKey({
-    p: PROVIDER,
-    r: options.routingId,
-    o: outwardId,
-    i: returnId,
-    d: options.direction,
-  });
+  const departure = first?.time.departure ?? null;
+  const arrival = last?.time.arrival ?? null;
 
   return {
-    identifier,
+    // A perna da companhia. A chave de venda está em `fares[].fareId`.
+    identifier: options.direction === 'return' ? returnId : outwardId,
     company: { code: first?.company.code ?? null, name: first?.company.name ?? null },
     origin: first?.origin ?? null,
     destination: last?.destination ?? null,
-    time: flightTime(first?.time.departure ?? null, last?.time.arrival ?? null),
+    time: {
+      departure,
+      arrival,
+      duration: segments.every((segment) => segment.time.duration > 0)
+        ? segments.reduce((sum, segment) => sum + segment.time.duration, 0)
+        : flightDuration(null, departure, arrival),
+    },
     stops: segments.length > 0 ? segments.length - 1 : null,
     flights: segments,
-    fares: [normalizeFare(route, options.passengerCount, options.routingId, outwardId)],
+    fares: [normalizeFare(
+      route, options.passengerCount, options.routingId, outwardId, returnId, options.direction,
+    )],
     fees: [],
   };
 }

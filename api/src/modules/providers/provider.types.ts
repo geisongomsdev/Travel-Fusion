@@ -8,7 +8,7 @@
 import { OfferKey } from '../../common/utils/offer-key';
 import { AvailabilityDto } from '../flight/dto/availability.dto';
 import { CreateBookingDto, FareRulesDto, QuoteDto } from '../flight/dto/booking.dto';
-import { Leg } from '../flight/flight.types';
+import { Baggage, Leg } from '../flight/flight.types';
 import type { RequiredParameter as ProviderRequiredParameter } from './travelfusion/normalizers/luggage.normalizer';
 
 export interface RequestContext {
@@ -23,9 +23,8 @@ export interface RequestContext {
  *
  * Os dois provedores declaram a combinabilidade — a Travelfusion pelo
  * `RoutingId`, a LATAM pelo `OfferID` — e por isso nenhum dos dois autoriza
- * parear ida com volta por conta própria (04-availability-formatos.md §2).
- * Modelar a oferta como par já fechado é o que torna essa regra impossível de
- * violar por engano lá em cima.
+ * parear ida com volta por conta própria. Modelar a oferta como par já fechado
+ * é o que torna essa regra impossível de violar por engano lá em cima.
  */
 export interface ProviderOffer {
   outbound: Leg;
@@ -38,24 +37,42 @@ export interface ProviderProbe {
   scope: 'credential' | 'connection';
 }
 
+/**
+ * O preço firme do `/quote`.
+ *
+ * 🔴 `taxes` é um ESCALAR aqui, ao contrário da busca, onde é a discriminação
+ * por natureza. É o que o modelo publica, e é honesto: nenhum dos dois
+ * provedores discrimina imposto no tarifar — só devolve o total.
+ */
 export interface QuotedPrice {
   base: number | null;
-  taxes: { boarding: number | null; service: number; fuel: number; baggage: number };
+  taxes: number | null;
   fees: number | null;
   total: number | null;
   currency: string;
 }
 
 /**
- * O shape ja publicado pelo contrato na resposta do /quote. Reaproveitado como
- * tipo da interface para que o campo nao mude de forma conforme o provedor —
- * quem consome monta UM formulario, nao dois.
+ * O shape já publicado pelo contrato na resposta do /quote. Reaproveitado como
+ * tipo da interface para que o campo não mude de forma conforme o provedor —
+ * quem consome monta UM formulário, não dois.
  */
 export type { RequiredParameter } from './travelfusion/normalizers/luggage.normalizer';
 
 export interface ProviderQuote {
+  /** 🔴 `false` = a oferta não pode mais ser confirmada. Não é erro: é resposta. */
+  available: boolean;
+  familyCode: string | null;
+  family: string | null;
   price: QuotedPrice;
   requiredParameters: ProviderRequiredParameter[];
+}
+
+export interface ProviderPassenger {
+  id: string;
+  type: string | null;
+  firstName: string | null;
+  lastName: string | null;
 }
 
 export interface ProviderBooking {
@@ -64,6 +81,8 @@ export interface ProviderBooking {
   /** 🔴 Só `true` no status final de sucesso. Nunca deduzido de `committed`. */
   confirmed: boolean;
   status: string;
+  currency: string | null;
+  passengers: ProviderPassenger[];
 }
 
 /**
@@ -76,10 +95,10 @@ export interface ProviderBooking {
  */
 export interface ProviderRetrieval {
   status: 'confirmed' | 'pending' | 'cancelled' | null;
-  /** Estado cru do provedor, para diagnostico. Nunca publicado como status. */
+  /** Estado cru do provedor, para diagnóstico. Nunca publicado como status. */
   rawStatus: string | null;
   locator: string;
-  /** Localizador da COMPANHIA — num agregador difere do do provedor, e e o que
+  /** Localizador da COMPANHIA — num agregador difere do do provedor, e é o que
    * o passageiro usa no check-in. */
   supplierConfirmation: string | null;
   supplierName: string | null;
@@ -93,12 +112,23 @@ export interface ProviderRetrieval {
    * — é o caso da Travelfusion, cujo `CheckBooking` não traz itinerário.
    *
    * 🔴 A LATAM traz: o `OrderRetrieve` devolve `PaxSegmentList` completo, com
-   * voo, horários, duração e aeronave. Isso estava sendo jogado fora porque o
-   * contrato foi escrito quando só existia a Travelfusion.
+   * voo, horários, duração e aeronave.
    */
   segments: ProviderSegment[];
+  /**
+   * O agrupamento dos segmentos em JOURNEYS, na ordem da viagem.
+   *
+   * 🔴 Sem isto não dá para dizer o que é ida e o que é volta: dois segmentos
+   * podem ser uma conexão de uma perna só ou duas pernas distintas, e a
+   * diferença não está no segmento. `[]` quando a companhia não agrupa — aí o
+   * caso de uso trata a reserva como uma journey só, em vez de inventar uma
+   * volta que talvez seja escala.
+   */
+  journeys: Array<{ id: string; segmentIds: string[] }>;
   /** Total pago/a pagar, quando a companhia informa. */
   total: number | null;
+  /** Documentos da reserva. `[]` é legítimo numa reserva não emitida. */
+  tickets: ProviderTicket[];
 }
 
 export interface ProviderSegment {
@@ -107,11 +137,31 @@ export interface ProviderSegment {
   destination: string | null;
   departure: string | null;
   arrival: string | null;
-  /** ISO-8601 (`PT4H5M`) — devolvido como veio, sem virar minutos. */
-  duration: string | null;
+  /** Minutos — convertido na fronteira, para o contrato não publicar ISO cru. */
+  duration: number;
   company: { code: string | null; number: string | null };
   cabin: string | null;
   aircraft: string | null;
+  fareBasis: string | null;
+  bookingClass: string | null;
+}
+
+/**
+ * Um bilhete ou EMD.
+ *
+ * 🔴 `tickets[]` e `emds[]` são listas SEPARADAS no contrato: o documento de voo
+ * e o de serviço têm ciclos de vida diferentes, e cancelar um não cancela o
+ * outro. `type` diz qual é — `flight` vive em tickets, o resto em emds.
+ */
+export interface ProviderTicket {
+  ticketNumber: string | null;
+  type: 'flight' | 'baggage' | 'seat' | 'other';
+  passengerId: string | null;
+  passengerName: string | null;
+  status: 'issued' | 'voided' | 'refunded' | 'cancelled' | 'failed' | 'unknown' | null;
+  providerStatus: string | null;
+  issueDate: string | null;
+  amount: { total: number; currency: string | null } | null;
 }
 
 export interface FareRuleSection {
@@ -171,7 +221,7 @@ export interface FlightProvider {
   seatMap?(key: OfferKey, context: RequestContext): Promise<ProviderSeatMap>;
 
   /** Opcionais vendidos à parte. Endereçado pela oferta, como o mapa. */
-  ancillaries?(key: OfferKey, context: RequestContext): Promise<ProviderAncillary[]>;
+  ancillaries?(key: OfferKey, context: RequestContext): Promise<ProviderAncillaryCatalog>;
 
   /**
    * Os mesmos dois catálogos, endereçados pela RESERVA já emitida.
@@ -182,7 +232,7 @@ export interface FlightProvider {
    */
   seatMapForOrder?(locator: string, context: RequestContext): Promise<ProviderSeatMap>;
 
-  ancillariesForOrder?(locator: string, context: RequestContext): Promise<ProviderAncillary[]>;
+  ancillariesForOrder?(locator: string, context: RequestContext): Promise<ProviderAncillaryCatalog>;
 
   /** Comprar os opcionais escolhidos. Mutação não idempotente: cobra o cartão. */
   sellAncillaries?(
@@ -215,11 +265,28 @@ export interface ProviderFinancing {
   }>;
 }
 
+/** Cartão no vocabulário da fronteira: já convertido do que o contrato recebe. */
+export interface ProviderCard {
+  brand: string;
+  holder: string;
+  number: string;
+  securityCode: string;
+  /** `MMAA` — a conversão de `MM/YYYY` acontece no caso de uso. */
+  expiration: string;
+}
+
+export interface ProviderPayer {
+  firstName: string;
+  lastName: string;
+  dateOfBirth: string;
+  documentNumber: string;
+}
+
 export interface ProviderPayment {
-  card: { brand: string; holder: string; number: string; securityCode: string; expiration: string };
+  card: ProviderCard;
   billing: { email: string; countryCode: string; postalCode: string; street: string };
   /** Quem paga — obrigatório na LATAM, e nem sempre é o passageiro. */
-  payer: { firstName: string; lastName: string; dateOfBirth: string; documentNumber: string };
+  payer: ProviderPayer;
   amount: { total: number; currency: string };
   installmentId: string | null;
 }
@@ -227,80 +294,153 @@ export interface ProviderPayment {
 export interface ProviderAncillaryPurchase {
   items: Array<{
     offerItemId: string;
+    serviceId: string | null;
     paxId: string;
     /** Obrigatório para assento: a LATAM quer a poltrona além do id. */
     seat?: { row: string; column: string } | null;
   }>;
   amount: { total: number; currency: string };
   /** `null` cobra por BSP (`PaymentTypeCode CA`) — usado quando o total é zero. */
-  card: {
-    brand: string;
-    holder: string;
-    number: string;
-    securityCode: string;
-    expiration: string;
-  } | null;
-  payer: { firstName: string; lastName: string; dateOfBirth: string; documentNumber: string } | null;
+  card: ProviderCard | null;
+  payer: ProviderPayer | null;
+}
+
+export interface ProviderPurchasedService {
+  /** O `OfferItemID` de volta, para o caso de uso reencontrar o item pedido. */
+  offerItemId: string | null;
+  serviceId: string | null;
+  name: string | null;
+  paxId: string | null;
+  segmentId: string | null;
+  seat: string | null;
+  /** `booked` = pendente; `issued` = EMD emitido; `failed` = recusado. */
+  status: 'booked' | 'issued' | 'failed' | null;
+  providerStatus: string | null;
+  emdNumber: string | null;
+  message: string | null;
 }
 
 export interface ProviderAncillaryPurchaseResult {
   locator: string;
-  /** `confirmed` só quando a companhia diz que o serviço está confirmado. */
-  status: 'confirmed' | 'pending';
+  /** A companhia aceitou e gravou. NUNCA `null`. */
+  committed: boolean;
+  /**
+   * 🔴 Existe PROVA do efeito? `null` quando a companhia responde "ok" e não
+   * devolve o serviço — e `null` não é sucesso comprovado.
+   */
+  confirmed: boolean | null;
   rawStatus: string | null;
-  services: Array<{
-    serviceId: string | null;
-    name: string | null;
-    paxId: string | null;
-    segmentId: string | null;
-    seat: string | null;
-    status: string | null;
-  }>;
+  services: ProviderPurchasedService[];
   total: { total: number; currency: string | null } | null;
 }
 
 export interface ProviderIssue {
   locator: string;
-  /** `issued` só em status final. Pendente NÃO é emitido. */
-  status: 'issued' | 'pending';
+  committed: boolean;
+  /** 🔴 Só `true` com prova estruturada de documento emitido. */
+  confirmed: boolean | null;
+  /** Ficou aguardando processamento assíncrono da companhia. */
+  queued: boolean;
   rawStatus: string | null;
-  tickets: string[];
+  authorizationCode: string | null;
+  tickets: ProviderTicket[];
+  /** EMDs de bagagem/assento materializados junto, quando existirem. */
+  emds: ProviderTicket[];
+  /** Avisos CRUS da companhia. */
+  messages: string[];
 }
 
+/**
+ * Passageiro e trecho de um CATÁLOGO — o mapa de assentos e a lista de
+ * opcionais publicam os dois, e é o mesmo dado.
+ *
+ * 🔴 Sem eles, quem consome recebe ofertas amarradas a `passengerId` e
+ * `segmentId` que não sabe traduzir: o id existe, mas não há como dizer de quem
+ * nem de qual voo ele é. Os dois catálogos trazem isso em `DataLists` e estava
+ * sendo descartado.
+ */
+export interface CatalogPassenger {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  type: string | null;
+}
+
+export interface CatalogSegment {
+  segmentId: string | null;
+  origin: string | null;
+  destination: string | null;
+  departureDate: string | null;
+  number: string | null;
+  company: { code: string | null; name: string | null };
+}
+
+export interface ProviderAncillaryCatalog {
+  currency: string | null;
+  passengers: CatalogPassenger[];
+  segments: CatalogSegment[];
+  offers: ProviderAncillary[];
+}
+
+/** Uma oferta de opcional — `offers[]` do contrato. */
 export interface ProviderAncillary {
-  /** Opacos: o PAR identifica o serviço na compra. Devolver intactos. */
-  offerItemId: string | null;
-  serviceId: string | null;
+  /** Opaca: carrega o par `OfferItemID` + `ServiceID`. Devolver intacta. */
+  key: string | null;
+  /** Tipo DECLARADO pela companhia, nunca inferido do nome. */
+  type: string | null;
+  /** RFISC/SSR cru, quando existir. */
+  code: string | null;
   name: string | null;
   description: string | null;
   price: { total: number; currency: string | null } | null;
-  paxId: string | null;
+  passengerId: string | null;
   segmentId: string | null;
+  /** Franquia estruturada, quando a companhia a descreve. */
+  baggage: Baggage | null;
 }
 
 export interface ProviderSeat {
   seat: string | null;
   row: string | null;
   column: string | null;
-  status: string;
+  status: 'available' | 'occupied' | 'blocked' | 'unavailable';
   available: boolean;
   paid: boolean;
   price: { total: number; currency: string | null } | null;
-  characteristic: string | null;
-  /** Opacos: o PAR identifica o assento na compra. Devolver intactos. */
-  offerItemId: string | null;
-  serviceId: string | null;
+  /** Canônicas (`window`/`aisle`/`middle`) e as cruas, lado a lado. */
+  characteristics: string[];
+  providerCharacteristics: string[];
+  commercialName: string | null;
+  accessible: boolean | null;
+  recline: boolean | null;
+  /** Opaca: mesmo par do opcional. */
+  key: string | null;
+}
+
+export interface ProviderSeatMapSegment extends CatalogSegment {
+  equipment: { code: string | null; name: string | null };
+  cabins: Array<{
+    cabinClass: string | null;
+    rows: Array<{ number: string | null; exitRow: boolean; seats: ProviderSeat[] }>;
+  }>;
 }
 
 export interface ProviderSeatMap {
   currency: string | null;
-  segments: Array<{
-    segmentId: string | null;
-    cabins: Array<{
-      cabinClass: string | null;
-      rows: Array<{ number: string | null; exitRow: boolean; seats: ProviderSeat[] }>;
-    }>;
+  /** Se a companhia exige pagamento para marcar. `null` = não declarou. */
+  paymentRequired: boolean | null;
+  /**
+   * 🔴 `assignedSeats` é `null` quando a companhia não informa quais assentos o
+   * passageiro já tem, e `[]` quando informa que não há nenhum. As duas coisas
+   * acontecem, e confundi-las mostra "sem assento" para quem já escolheu um.
+   */
+  passengers: Array<{
+    id: string;
+    firstName: string | null;
+    lastName: string | null;
+    assignedSeats: Array<{ segmentId: string | null; seat: string | null }> | null;
   }>;
+  segments: ProviderSeatMapSegment[];
 }
 
 /** O que o contrato precisa saber de um cancelamento. */
@@ -308,9 +448,21 @@ export interface ProviderCancellation {
   locator: string;
   /** 🔴 `cancelled` só quando a companhia confirma. Pendente NÃO é cancelado. */
   status: 'cancelled' | 'pending';
+  /**
+   * O EFEITO observado, que não é o mesmo que o status: `VOID` anula o bilhete,
+   * `REFUND` devolve dinheiro. A companhia decide qual, e quem consome precisa
+   * saber para explicar ao passageiro.
+   */
+  outcome: 'VOID' | 'REFUND' | 'PROCESSED' | 'UNKNOWN';
   rawStatus: string | null;
   /** Quanto a companhia declarou que devolve. `null` = ela não disse. */
   refund: { total: number; currency: string | null } | null;
+  /**
+   * 🔴 `false` por padrão, e de propósito: o `OrderCancelRS` NÃO prova que um
+   * e-ticket foi anulado. Só vira `true` com o cupom lido como VOID/REFUND.
+   */
+  eticketsCancelled: boolean;
+  tickets: ProviderTicket[];
 }
 
 export const FLIGHT_PROVIDERS = Symbol('FLIGHT_PROVIDERS');

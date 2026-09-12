@@ -1,8 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { AppError } from '../../../common/errors/app-error';
+import { expiryToMMYY } from '../../../common/utils/card';
 import { ProviderRegistry } from '../../providers/provider.registry';
-import { RequestContext } from '../../providers/provider.types';
-import { FinancingOptionsDto, IssueDto } from '../dto/booking.dto';
+import {
+  ProviderCard, ProviderFinancing, ProviderTicket, RequestContext,
+} from '../../providers/provider.types';
+import { CreditCardDto, FinancingOptionsDto, IssueDto } from '../dto/booking.dto';
 
 /**
  * Parcelamento e pagamento.
@@ -17,13 +20,38 @@ import { FinancingOptionsDto, IssueDto } from '../dto/booking.dto';
  * Se um dia precisar de log de auditoria, o que se registra é o
  * `correlationId` e o localizador, nunca o meio de pagamento.
  */
+
+export interface FinancingResult {
+  provider: string;
+  locator: string;
+  cardBrand: string | null;
+  currency: string | null;
+  options: ProviderFinancing['options'];
+}
+
+export interface IssueResult {
+  provider: string;
+  locator: string;
+  /** A companhia aceitou e gravou. Nunca `null`. */
+  committed: boolean;
+  /** 🔴 Prova estruturada de documento emitido. `null` = a prova não existe ainda. */
+  confirmed: boolean | null;
+  queued: boolean;
+  amount: { currency: string; total: number };
+  authorizationCode: string | null;
+  tickets: ProviderTicket[];
+  emds: ProviderTicket[];
+  messages: string[];
+  providerStatus: string | null;
+}
+
 @Injectable()
 export class PaymentService {
   private readonly logger = new Logger(PaymentService.name);
 
   constructor(private readonly registry: ProviderRegistry) {}
 
-  async financingOptions(dto: FinancingOptionsDto, context: RequestContext = {}) {
+  async financingOptions(dto: FinancingOptionsDto, context: RequestContext = {}): Promise<FinancingResult> {
     const provider = dto.options?.provider
       ? this.registry.get(dto.options.provider)
       : this.registry.default();
@@ -32,7 +60,11 @@ export class PaymentService {
       throw new AppError('CAPABILITY_NOT_SUPPORTED', { metadata: { operation: 'financingOptions' } });
     }
 
-    const financing = await provider.financingOptions(dto.booking.locator, dto.card, context);
+    const financing = await provider.financingOptions(
+      dto.booking.locator,
+      dto.payment.creditCard.number,
+      context,
+    );
 
     return {
       provider: provider.name,
@@ -47,7 +79,7 @@ export class PaymentService {
   /**
    * Pagar. Esta é a operação mais cara de errar do contrato inteiro.
    */
-  async issue(dto: IssueDto, context: RequestContext = {}) {
+  async issue(dto: IssueDto, context: RequestContext = {}): Promise<IssueResult> {
     const provider = dto.options?.provider
       ? this.registry.get(dto.options.provider)
       : this.registry.default();
@@ -56,14 +88,16 @@ export class PaymentService {
       throw new AppError('CAPABILITY_NOT_SUPPORTED', { metadata: { operation: 'issue' } });
     }
 
+    const { booking, payment } = dto.issue;
+
     /**
      * 🔴 O valor a cobrar é PERGUNTADO à companhia, não aceito de quem chamou.
      * Confiar no número do corpo é a maneira mais fácil de cobrar errado — e o
-     * erro só aparece no extrato do passageiro. Quem manda um `amount` está
+     * erro só aparece no extrato do passageiro. Quem manda `billedAmount` está
      * declarando o que espera; se divergir do que a companhia diz, a cobrança
      * não acontece.
      */
-    const current = await provider.retrieve(dto.booking.locator, context);
+    const current = await provider.retrieve(booking.locator, context);
     const expected = current.total;
 
     if (expected === null) {
@@ -80,32 +114,29 @@ export class PaymentService {
       });
     }
 
-    if (dto.amount && Math.abs(dto.amount.total - expected) > 0.01) {
+    if (payment.billedAmount !== undefined && Math.abs(payment.billedAmount - expected) > 0.01) {
       throw new AppError('FARE_PRICE_CHANGED', {
         metadata: { operation: 'issue' },
         details: {
           errors: {
-            amount: [`A companhia cobra ${expected}; o pedido declarou ${dto.amount.total}.`],
+            'issue.payment.billedAmount': [
+              `A companhia cobra ${expected}; o pedido declarou ${payment.billedAmount}.`,
+            ],
           },
         },
       });
     }
 
+    const currency = current.currency ?? payment.currency ?? 'BRL';
+
     const issued = await provider.issue(
-      dto.booking.locator,
+      booking.locator,
       {
-        card: {
-          brand: dto.card.brand,
-          holder: dto.card.holder,
-          number: dto.card.number,
-          securityCode: dto.card.securityCode,
-          // A LATAM quer `MMAA` sem separador; a tela usa `MM/AA`.
-          expiration: dto.card.expiration.replace('/', ''),
-        },
-        billing: dto.billing,
-        payer: dto.payer,
-        amount: { total: expected, currency: current.currency ?? 'BRL' },
-        installmentId: dto.installmentId ?? null,
+        card: toProviderCard(payment.creditCard),
+        billing: payment.billing,
+        payer: payerOf(payment.creditCard, 'issue.payment.creditCard'),
+        amount: { total: expected, currency },
+        installmentId: payment.installmentId ?? null,
       },
       context,
     );
@@ -116,12 +147,59 @@ export class PaymentService {
     return {
       provider: provider.name,
       locator: issued.locator,
-      /** 🔴 `pending` NÃO é emitido: consulte o `/retrieve` antes de reemitir. */
-      issued: issued.status === 'issued',
-      status: issued.status,
-      rawStatus: issued.rawStatus,
-      amount: { total: expected, currency: current.currency ?? 'BRL' },
+      committed: issued.committed,
+      confirmed: issued.confirmed,
+      queued: issued.queued,
+      amount: { currency, total: expected },
+      authorizationCode: issued.authorizationCode,
       tickets: issued.tickets,
+      emds: issued.emds,
+      messages: issued.messages,
+      providerStatus: issued.rawStatus,
     };
   }
+}
+
+/** O cartão do contrato no vocabulário da fronteira. */
+export function toProviderCard(card: CreditCardDto): ProviderCard {
+  return {
+    brand: card.brand,
+    holder: card.holderName,
+    number: card.number,
+    securityCode: card.cvv,
+    // 🔴 `MM/YYYY` → `MMAA`: seis dígitos onde a companhia espera quatro é
+    // recusa de pagamento, e o motivo não aparece na mensagem de erro.
+    expiration: expiryToMMYY(card.expiryDate),
+  };
+}
+
+/**
+ * Quem PAGA, a partir dos dados do titular.
+ *
+ * 🔴 A LATAM exige `Payer` com CPF e data de nascimento — sem eles devolve
+ * `400113007 PaymentProcessingDetails.Payer is mandatory`. A recusa acontece
+ * aqui, antes da rede, com o campo que falta nomeado: deixar a companhia
+ * recusar transformaria um corpo incompleto num erro de integração.
+ */
+export function payerOf(card: CreditCardDto, path: string) {
+  if (!card.holderDocument || !card.holderBirthDate) {
+    throw new AppError('SEARCH_VALIDATION_ERROR', {
+      metadata: { operation: 'issue' },
+      details: {
+        errors: {
+          [`${path}.holderDocument`]: ['Obrigatório: a companhia exige o documento do titular para cobrar.'],
+          [`${path}.holderBirthDate`]: ['Obrigatório: a companhia exige a data de nascimento do titular.'],
+        },
+      },
+    });
+  }
+
+  const parts = card.holderName.trim().split(/\s+/);
+
+  return {
+    firstName: parts[0] ?? card.holderName,
+    lastName: parts.slice(1).join(' ') || parts[0] || card.holderName,
+    dateOfBirth: card.holderBirthDate,
+    documentNumber: card.holderDocument,
+  };
 }

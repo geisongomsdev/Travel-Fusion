@@ -18,10 +18,15 @@ const PROVIDERS = [
   { value: 'travelfusion', label: 'Travelfusion' },
 ];
 
+/**
+ * 🔴 Multidestino ficou de fora, e é honestidade, não esquecimento: o contrato
+ * exige a lista COMPLETA de trechos (`segments[]`, no mínimo dois) e esta barra
+ * só sabe descrever um par origem-destino. Oferecer a opção deixaria a pessoa
+ * escolher algo que sempre volta 400. A API atende multidestino; falta a tela.
+ */
 const TRIP_TYPES = [
   { value: 'oneway', label: 'Ida' },
   { value: 'roundtrip', label: 'Ida e volta' },
-  { value: 'multicity', label: 'Multidestino' },
 ];
 
 const CABINS = [
@@ -104,6 +109,16 @@ export function SearchToolbar({ form, onChange, onSwap, onSubmit, running }) {
         onChange={(date) => onChange('date', date)}
         className={cn('h-9', TOOLBAR_CHIP)}
       />
+
+      {/* A volta só existe quando há volta: um campo de data sempre visível
+          sugeriria que a ida-e-volta é o padrão. */}
+      {form.type === 'roundtrip' && (
+        <DatePicker
+          value={form.returnDate}
+          onChange={(date) => onChange('returnDate', date)}
+          className={cn('h-9', TOOLBAR_CHIP)}
+        />
+      )}
 
       <Select value={String(form.adults)} onValueChange={(value) => onChange('adults', Number(value))}>
         <SelectTrigger className={chipTrigger} aria-label="Adultos">

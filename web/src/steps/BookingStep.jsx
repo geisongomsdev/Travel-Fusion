@@ -8,8 +8,8 @@ import { formatMoney, formatTime } from '@/lib/utils';
 
 /**
  * 🔴 Os campos aqui não são escolha de tela: são os `requiredParameters` que o
- * `/quote` declarou. `documentNumber` vai por passageiro; `email` e `phone` são
- * da reserva, e a LATAM recusa a ordem sem eles.
+ * `/quote` declarou. O documento vai por passageiro; e-mail e telefone são da
+ * reserva, e a companhia recusa a ordem sem eles.
  *
  * O que NÃO aparece: nome de mensagem NDC, URL de endpoint e aviso de
  * idempotência. Isso é verdade da integração — vive no README e no código, não
@@ -20,7 +20,7 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
     title: 'Mr',
     firstName: 'Andy',
     lastName: 'Peterson',
-    dateOfBirth: '1990-04-21',
+    birthDate: '1990-04-21',
     documentNumber: 'AAB0302',
   });
 
@@ -51,8 +51,20 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
   const submit = (event) => {
     event.preventDefault();
     const { documentNumber, ...individual } = passenger;
+
+    /**
+     * 🔴 `people` é um MAPA com o PaxID na chave. A oferta foi tarifada para
+     * uma composição específica, e é o PaxID que amarra tarifa, assento e
+     * bilhete ao passageiro certo.
+     */
     onBook(
-      [{ ...individual, customParameters: { documentNumber } }],
+      {
+        ADT_1: {
+          ...individual,
+          ageGroup: 'adult',
+          document: { type: 'PASSPORT', number: documentNumber },
+        },
+      },
       { email: contact.email, phone: contact.phone },
     );
   };
@@ -84,12 +96,12 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
                 <Input id="title" value={passenger.title} onChange={updatePassenger('title')} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="dateOfBirth">Data de nascimento</Label>
+                <Label htmlFor="birthDate">Data de nascimento</Label>
                 <Input
-                  id="dateOfBirth"
+                  id="birthDate"
                   type="date"
-                  value={passenger.dateOfBirth}
-                  onChange={updatePassenger('dateOfBirth')}
+                  value={passenger.birthDate}
+                  onChange={updatePassenger('birthDate')}
                 />
               </div>
               <div className="space-y-1.5 sm:col-span-2">
@@ -140,9 +152,14 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
  * o que é polling.
  */
 function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, onPay }) {
+  const locator = booking.booking?.locator;
   const pending = booking.committed && !booking.confirmed;
-  const status = retrieved?.status ?? (booking.confirmed ? 'confirmed' : 'pending');
-  const cancelled = cancellation?.cancelled || status === 'cancelled';
+  const status = retrieved?.booking?.status ?? (booking.confirmed ? 'confirmed' : 'pending');
+  const cancelled = cancellation?.status === 'CANCELLED' || status === 'cancelled';
+
+  // 🔴 A lista COMPLETA de pernas. Em multidestino `departure`/`return` vêm
+  // `null` de propósito, e só `journeys` tem a viagem inteira.
+  const journeys = retrieved?.segments?.journeys ?? [];
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
@@ -176,41 +193,47 @@ function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, 
 
           <div className="rounded-lg border bg-muted/50 px-4 py-3">
             <p className="text-xs text-muted-foreground">Localizador</p>
-            <p className="font-mono text-2xl font-semibold tracking-wide">{booking.locator || '—'}</p>
+            <p className="font-mono text-2xl font-semibold tracking-wide">{locator || '—'}</p>
           </div>
 
           {/* O voo só aparece depois de Atualizar: é o /retrieve que traz o
               itinerário, e ele é leitura ao vivo, não cópia do que guardamos. */}
-          {retrieved?.segments?.length > 0 && (
+          {journeys.length > 0 && (
             <div className="space-y-3 rounded-lg border px-4 py-3">
-              {retrieved.segments.map((segment) => (
-                <div key={segment.segmentId} className="flex flex-wrap items-baseline justify-between gap-2">
+              {journeys.map((journey, index) => (
+                <div key={index} className="flex flex-wrap items-baseline justify-between gap-2">
                   <div>
                     <p className="font-medium tabular-nums">
-                      {formatTime(segment.departure)} → {formatTime(segment.arrival)}
+                      {formatTime(journey.time?.departure)} → {formatTime(journey.time?.arrival)}
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      {segment.origin} → {segment.destination}
-                      {segment.company.code ? ` · ${segment.company.code}${segment.company.number ?? ''}` : ''}
-                      {segment.cabin ? ` · ${segment.cabin.toLowerCase()}` : ''}
+                      {journey.origin?.iata} → {journey.destination?.iata}
+                      {journey.flights?.[0]?.company?.code
+                        ? ` · ${journey.flights[0].company.code}${journey.flights[0].company.number ?? ''}`
+                        : ''}
+                      {journey.stops > 0 ? ` · ${journey.stops} parada(s)` : ''}
                     </p>
                   </div>
-                  {segment.duration && (
-                    <span className="text-sm text-muted-foreground">{humanDuration(segment.duration)}</span>
+                  {journey.time?.duration > 0 && (
+                    <span className="text-sm text-muted-foreground">{humanDuration(journey.time.duration)}</span>
                   )}
                 </div>
               ))}
-              {retrieved.total !== null && retrieved.total !== undefined && (
+              {retrieved?.total != null && (
                 <p className="border-t pt-3 text-sm">
-                  Total <span className="font-medium">{formatMoney(retrieved.total, retrieved.currency)}</span>
+                  Total{' '}
+                  <span className="font-medium">
+                    {formatMoney(retrieved.total, retrieved.booking?.currency)}
+                  </span>
                 </p>
               )}
             </div>
           )}
 
-          {retrieved?.expiresAt && !cancelled && (
+          {retrieved?.booking?.timeLimit && !cancelled && (
             <p className="text-sm text-muted-foreground">
-              Pague até <span className="font-medium text-foreground">{formatDeadline(retrieved.expiresAt)}</span>{' '}
+              Pague até{' '}
+              <span className="font-medium text-foreground">{formatDeadline(retrieved.booking.timeLimit)}</span>{' '}
               ou a companhia libera o assento.
             </p>
           )}
@@ -231,7 +254,7 @@ function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, 
             <p className="text-sm text-muted-foreground">
               Reembolso de{' '}
               <span className="font-medium text-foreground">
-                {formatMoney(cancellation.refund.total, cancellation.refund.currency)}
+                {formatMoney(cancellation.refund.amount, cancellation.refund.currency)}
               </span>
               .
             </p>
@@ -245,11 +268,10 @@ function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, 
                 <CreditCard /> Pagar
               </Button>
             )}
-            <Button variant="outline" disabled={running} onClick={() => onRetrieve(booking.locator)}>
+            <Button variant="outline" disabled={running} onClick={() => onRetrieve(locator)}>
               {running ? <Loader2 className="animate-spin" /> : <RefreshCw />}
               Atualizar
             </Button>
-
           </div>
         </CardContent>
       </Card>
@@ -257,15 +279,12 @@ function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, 
   );
 }
 
-/** `PT4H5M` → `4h05`. A companhia manda ISO-8601; ninguém lê ISO-8601. */
-function humanDuration(iso) {
-  const match = /PT(?:(\d+)H)?(?:(\d+)M)?/.exec(iso ?? '');
-  if (!match) return null;
-
-  const [, hours, minutes] = match;
-  if (!hours) return `${minutes ?? 0}min`;
-
-  return `${hours}h${minutes ? String(minutes).padStart(2, '0') : ''}`;
+/** `245` → `4h05`. A API publica minutos; ninguém lê minutos. */
+function humanDuration(minutes) {
+  if (!minutes) return null;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return hours ? `${hours}h${rest ? String(rest).padStart(2, '0') : ''}` : `${rest}min`;
 }
 
 /** Data do prazo sem segundos nem fuso — o que importa é o dia e a hora. */

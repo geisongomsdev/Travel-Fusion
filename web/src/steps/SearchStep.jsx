@@ -16,6 +16,7 @@ export function SearchStep({ onSearch, running }) {
     origin: 'GRU',
     destination: 'SCL',
     date: '2026-11-20',
+    returnDate: '2026-11-27',
     adults: 1,
     cabin: 'economy',
     provider: 'latam',
@@ -26,10 +27,21 @@ export function SearchStep({ onSearch, running }) {
 
   const submit = (event) => {
     event.preventDefault();
+
+    /**
+     * 🔴 A viagem é descrita por PONTAS, não por uma lista de trechos: em ida e
+     * volta o destino da ida é a origem da volta, e a data do retorno mora em
+     * `arrival.date`. É o que deixa `type` ser explícito em vez de inferido pela
+     * quantidade de datas — duas datas não provam ida-e-volta.
+     */
     onSearch({
       type: form.type,
-      legs: [{ origin: form.origin.toUpperCase(), destination: form.destination.toUpperCase(), date: form.date }],
-      passengers: { adults: Number(form.adults) || 1, children: 0, babies: 0 },
+      departure: { iata: form.origin.toUpperCase(), date: form.date },
+      arrival: {
+        iata: form.destination.toUpperCase(),
+        ...(form.type === 'roundtrip' ? { date: form.returnDate } : {}),
+      },
+      passengers: { adults: Number(form.adults) || 1, children: 0, infants: 0 },
       options: { provider: [form.provider], class: form.cabin },
     });
   };
