@@ -2,36 +2,42 @@ import { Injectable } from '@nestjs/common';
 import { AppError } from '../../../common/errors/app-error';
 import { decodeOfferKey } from '../../../common/utils/offer-key';
 import { ProviderRegistry } from '../../providers/provider.registry';
-import { RequestContext } from '../../providers/provider.types';
-import { SeatMapDto } from '../dto/booking.dto';
+import {
+  ProviderSeatMapSegment, RequestContext,
+} from '../../providers/provider.types';
+import { OfferCatalogDto } from '../dto/booking.dto';
 
 export interface SeatMapResult {
   provider: string;
+  /**
+   * 🔴 `null` aqui, e de propósito: este mapa é da OFERTA, e a reserva ainda
+   * não existe. O modelo endereça pelo localizador porque assume escolha
+   * pós-reserva; na LATAM a escolha é anterior. Quem quer o mapa da reserva
+   * emitida usa o `/order-seat-map`, que preenche este campo.
+   */
+  locator: string | null;
+  fareId: string;
   currency: string | null;
-  segments: unknown[];
+  paymentRequired: boolean | null;
+  passengers: Array<{
+    id: string;
+    firstName: string | null;
+    lastName: string | null;
+    assignedSeats: Array<{ segmentId: string | null; seat: string | null }> | null;
+  }>;
+  segments: ProviderSeatMapSegment[];
 }
 
 @Injectable()
 export class SeatMapService {
   constructor(private readonly registry: ProviderRegistry) {}
 
-  /**
-   * O mapa de assentos da oferta.
-   *
-   * 🔴 DIVERGÊNCIA CONSCIENTE do contrato canônico, e ela está no README: o
-   * `09-assentos.md` endereça o mapa pelo LOCALIZADOR, porque assume que a
-   * escolha é pós-reserva. Na LATAM o `/seats/availability` responde pela
-   * OFERTA — a escolha é anterior, e o localizador ainda não existe.
-   *
-   * Endereçar pelo identifier é o que torna a operação utilizável de verdade;
-   * inventar um localizador para caber no formato seria pior.
-   */
-  async execute(dto: SeatMapDto, context: RequestContext = {}): Promise<SeatMapResult> {
-    const key = decodeOfferKey(dto.identifier);
+  async execute(dto: OfferCatalogDto, context: RequestContext = {}): Promise<SeatMapResult> {
+    const key = decodeOfferKey(dto.fareId);
     if (!key) {
       throw new AppError('SEARCH_VALIDATION_ERROR', {
-        details: { errors: { identifier: ['Identificador de oferta inválido ou expirado.'] } },
         metadata: { operation: 'seatMap' },
+        details: { errors: { fareId: ['Identificador de oferta inválido ou expirado.'] } },
       });
     }
 
@@ -45,12 +51,14 @@ export class SeatMapService {
 
     return {
       provider: provider.name,
+      locator: null,
+      fareId: dto.fareId,
       currency: map.currency,
+      paymentRequired: map.paymentRequired,
+      passengers: map.passengers,
       /**
        * `segments: []` é resposta VÁLIDA — o normalizador degrada em vez de
        * lançar quando o mapa vem ilegível, e a tela mostra "indisponível".
-       * O envelope do contrato já embrulha isto em `data`; embrulhar aqui
-       * também produzia `data.data`.
        */
       segments: map.segments,
     };

@@ -61,7 +61,7 @@ const errorResponse = (status: number, description: string): ApiResponseOptions 
   schema: ERROR_SCHEMA as unknown as Record<string, unknown>,
 });
 
-/** As distinções que custam caro se quem consome errar — 02-erros.md §2. */
+/** As distinções que custam caro se quem consome errar. */
 export const ERROR_RESPONSES: ApiResponseOptions[] = [
   errorResponse(400, 'SEARCH_VALIDATION_ERROR — o que você mandou está errado.'),
   errorResponse(401, 'PROVIDER_AUTHENTICATION_FAILED — a companhia olhou a credencial e recusou. Não retentar.'),
@@ -84,63 +84,48 @@ const notSupportedDescription = (reason: string): string =>
     '"payload inválido", verdade acidental que esconde o motivo real.',
   ].join('\n');
 
+/**
+ * As rotas que existem no contrato e não são atendidas.
+ *
+ * 🔴 Registradas de propósito: 501 documentado é melhor do que 404, porque diz a
+ * quem consome que a operação existe e o problema é este provedor.
+ *
+ * ⚠️ E a distinção que mais importa aqui: "a companhia não faz" é diferente de
+ * "ainda não integramos". As quatro abaixo são do segundo tipo — dívida nossa —
+ * e dizer o contrário no Swagger seria informação errada para quem decide se
+ * pode contar com a rota.
+ */
 export const NOT_SUPPORTED_ROUTES = {
-  cancelBooking: {
-    summary: 'Cancelar a reserva',
-    description: notSupportedDescription(
-      '⚠️ Não é limitação do provedor: a Travelfusion tem uma **Post Booking API** com spec separada. Ainda não integrada — é dívida nossa.',
-    ),
-  },
-  seatMap: {
-    summary: 'Ler o mapa de assentos',
-    description: notSupportedDescription(
-      'A seleção de assento depende do fornecedor por trás do agregador e ainda não há suporte confirmado na branch.',
-    ),
-  },
-  markSeats: {
-    summary: 'Marcar assento',
-    description: notSupportedDescription('Mesma dependência de fornecedor do /seat-map.'),
-  },
   removeSeats: {
     summary: 'Remover assento',
-    description: notSupportedDescription('Mesma dependência de fornecedor do /seat-map.'),
-  },
-  ancillaries: {
-    summary: 'Listar bagagem e extras à venda',
     description: notSupportedDescription(
-      'Disponível via /quote: os extras vêm em requiredParameters, parseados do ProcessDetails.',
-    ),
-  },
-  sellAncillaries: {
-    summary: 'Vender ou pendurar o extra',
-    description: notSupportedDescription(
-      'Não existe venda avulsa: o extra escolhido entra como CustomSupplierParameter no ProcessTerms, dentro do /booking.',
+      '⚠️ Não é limitação da companhia: no NDC a troca de assento pós-reserva existe, em '
+      + '`OrderChange` com oferta `SEAT_`. Ainda não está ligada a esta rota — é dívida nossa. '
+      + 'O método recomendado pelo contrato é `POST`; `DELETE` com corpo é compatibilidade deprecated.',
     ),
   },
   paymentOptions: {
     summary: 'Formas de pagamento da emissão',
-    description: notSupportedDescription('A Travelfusion não expõe catálogo de formas de pagamento por oferta.'),
-  },
-  financingOptions: {
-    summary: 'Parcelamento',
-    description: notSupportedDescription('A Travelfusion não expõe parcelamento.'),
-  },
-  issue: {
-    summary: 'Emitir',
     description: notSupportedDescription(
-      'Não há emissão separada: o StartBooking já cobra. A separação reservar/emitir do contrato não tem equivalente no provedor — ver docs/travelfusion/decisoes.md.',
+      'Esta rota é da plataforma, não da companhia: ela lista formas de pagamento de '
+      + 'consolidadores. A LATAM não é exposta aqui, e criar um mapa paralelo para ela seria '
+      + 'inventar um catálogo que a companhia não publica. Para parcelas, use /financing-options.',
     ),
   },
   retrieveEticket: {
     summary: 'Consultar o bilhete',
     description: notSupportedDescription(
-      '⚠️ Não é limitação do provedor: coberto pela **Post Booking API** da Travelfusion, ainda não integrada. Dívida nossa.',
+      '⚠️ Dívida nossa, não ausência da companhia. Enquanto isso o `/retrieve` já devolve os '
+      + 'documentos da reserva em `passengers[].tickets` — com `[]` legítimo numa reserva '
+      + 'ainda não emitida.',
     ),
   },
   cancelEticket: {
     summary: 'Anular ou reembolsar o bilhete',
     description: notSupportedDescription(
-      '⚠️ Não é limitação do provedor: coberto pela **Post Booking API**, mais a plataforma Manage Your Booking (credenciais só com a autorização de go-live). Ainda não integrada.',
+      '⚠️ Dívida nossa. O NDC usa `IATA_OrderCancelRQ` no mesmo endpoint do cancelamento, com '
+      + 'só o `OrderID` no cenário de void. Não confundir com /cancel-booking: void anula o '
+      + 'bilhete, normalmente no mesmo dia; cancelar a order pode envolver reembolso.',
     ),
   },
 } as const;

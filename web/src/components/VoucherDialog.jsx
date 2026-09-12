@@ -19,9 +19,11 @@ import { formatMoney } from '@/lib/utils';
  * Imprimir abre o diálogo do navegador — de onde também se salva em PDF. Não
  * geramos arquivo: o navegador já faz isso, e melhor.
  */
-export function VoucherDialog({ open, onOpenChange, locator, retrieved, paid, services }) {
-  const passenger = retrieved?.people?.[0];
-  const segments = retrieved?.segments ?? [];
+export function VoucherDialog({ open, onOpenChange, locator, retrieved, paid, items }) {
+  const passenger = retrieved?.passengers?.[0];
+  // Os trechos físicos de todas as pernas, na ordem da viagem.
+  const flights = (retrieved?.segments?.journeys ?? []).flatMap((journey) => journey.flights ?? []);
+  const currency = retrieved?.booking?.currency;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -53,13 +55,19 @@ export function VoucherDialog({ open, onOpenChange, locator, retrieved, paid, se
               {passenger.document?.number && (
                 <p className="text-sm text-muted-foreground">Documento {passenger.document.number}</p>
               )}
+              {/* 🔴 `[]` é legítimo: reserva sem emissão não tem documento. */}
+              {passenger.tickets?.length > 0 && (
+                <p className="text-sm text-muted-foreground">
+                  Bilhete {passenger.tickets.map((ticket) => ticket.ticketNumber).filter(Boolean).join(', ')}
+                </p>
+              )}
             </div>
           )}
 
-          {segments.length > 0 && (
+          {flights.length > 0 && (
             <div className="space-y-3">
               <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Voo</p>
-              {segments.map((segment, index) => (
+              {flights.map((segment, index) => (
                 <div key={segment.segmentId ?? index} className="rounded-md border px-3 py-2.5">
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
                     <p className="font-medium tabular-nums">
@@ -81,12 +89,13 @@ export function VoucherDialog({ open, onOpenChange, locator, retrieved, paid, se
             </div>
           )}
 
-          {services?.length > 0 && (
+          {items?.length > 0 && (
             <div>
               <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Extras</p>
-              {services.map((service, index) => (
-                <p key={service.serviceId ?? index} className="text-sm">
-                  {service.seat ? `Assento ${service.seat}` : service.name}
+              {items.map((item, index) => (
+                <p key={item.key ?? index} className="text-sm">
+                  {item.name ?? 'Serviço'}
+                  {item.emdNumber ? ` · ${item.emdNumber}` : ''}
                 </p>
               ))}
             </div>
@@ -95,9 +104,7 @@ export function VoucherDialog({ open, onOpenChange, locator, retrieved, paid, se
           {paid != null && (
             <div className="flex items-baseline justify-between border-t pt-4">
               <p className="text-sm">Total pago</p>
-              <p className="text-lg font-semibold tabular-nums">
-                {formatMoney(paid, retrieved?.currency)}
-              </p>
+              <p className="text-lg font-semibold tabular-nums">{formatMoney(paid, currency)}</p>
             </div>
           )}
         </div>

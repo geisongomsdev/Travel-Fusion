@@ -78,7 +78,8 @@ function partyAndPos(context: RequestContext): string {
 
 export interface AirShoppingRequest {
   legs: Array<{ origin: string; destination: string; date: string }>;
-  passengers: { adults: number; children: number; babies: number };
+  /** `infants` é o vocabulário da NDC e do contrato — INF, não "babies". */
+  passengers: { adults: number; children: number; infants: number };
   cabin?: string | null;
 }
 
@@ -91,7 +92,7 @@ export function buildPaxList(passengers: AirShoppingRequest['passengers']): Arra
 
   push('ADT', Math.max(1, passengers.adults));
   push('CHD', passengers.children);
-  push('INF', passengers.babies);
+  push('INF', passengers.infants);
   return list;
 }
 
@@ -511,6 +512,12 @@ export class LatamCommands {
     orderId: string,
     items: Array<{
       offerItemId: string;
+      /**
+       * 🔴 Sem `SelectedServiceRefID` a companhia recusa com `400112165`. O
+       * `ServiceID` não vem no mapa de assentos — só no `ALaCarteOfferItem` —
+       * e por isso viaja junto do `OfferItemID` dentro da chave opaca.
+       */
+      serviceId: string | null;
       paxId: string;
       /** Só para `SEAT_`: a LATAM exige a poltrona explícita, além do id. */
       seat?: { row: string; column: string } | null;
@@ -582,6 +589,9 @@ export class LatamCommands {
               SelectedOfferItem: items.map((item) => ({
                 OfferItemRefID: item.offerItemId,
                 PaxRefID: item.paxId,
+                SelectedBundleServices: item.serviceId
+                  ? { SelectedServiceRefID: item.serviceId }
+                  : undefined,
                 SelectedSeat: item.seat
                   ? { ColumnID: item.seat.column, SeatRowNumber: item.seat.row }
                   : undefined,
@@ -589,9 +599,34 @@ export class LatamCommands {
             },
           },
         },
+        DataLists: {
+          ContactInfoList: {
+            ContactInfo: {
+              ContactInfoID: 'AGENCY_1_CNT',
+              ContactPurposeText: 'BILLING',
+              EmailAddress: { EmailAddressText: 'ndc@example.com' },
+              PostalAddress: {
+                CountryCode: 'BR',
+                PostalCode: '00000000',
+                StreetText: 'Av Test',
+              },
+            },
+          },
+        },
         PaymentFunctions: {
           PaymentProcessingDetails: {
             Amount: { '@_CurCode': amount.currency, '#text': amount.total },
+            ContactInfoRefID: 'AGENCY_1_CNT',
+            Payer: payment.method === 'card'
+              ? {
+                  Individual: {
+                    Birthdate: payment.payer.dateOfBirth,
+                    GivenName: payment.payer.firstName,
+                    IndividualID: payment.payer.documentNumber,
+                    Surname: payment.payer.lastName,
+                  },
+                }
+              : undefined,
             PaymentMethod: paymentMethod,
           },
         },

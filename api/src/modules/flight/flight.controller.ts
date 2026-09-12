@@ -9,8 +9,9 @@ import { notSupported } from '../../common/errors/app-error';
 import { RequestContext } from '../providers/provider.types';
 import { AvailabilityDto } from './dto/availability.dto';
 import {
-  CancelBookingDto, CreateBookingDto, FareRulesDto, FinancingOptionsDto, IssueDto,
-  OrderCatalogDto, QuoteDto, RetrieveDto, SeatMapDto, SellAncillariesDto,
+  AncillariesDto, CancelBookingDto, CancelEticketDto, CreateBookingDto, FareRulesDto,
+  FinancingOptionsDto, IssueDto, MarkSeatsDto, OfferCatalogDto, OrderCatalogDto, PaymentOptionsDto,
+  QuoteDto, RemoveSeatsDto, RetrieveDto, RetrieveEticketDto, SellAncillariesDto,
 } from './dto/booking.dto';
 import { PingDto } from './dto/ping.dto';
 import { AvailabilityService } from './use-cases/availability.service';
@@ -67,8 +68,11 @@ export class FlightController {
       '**"Sem voos" NÃO é erro**: chega como `provider_error` com `data.error.code = "NO_FLIGHTS"`',
       'e **sem** `canonicalCode`. Discrimine por `canonicalCode`, nunca por `type`.',
       '',
-      'Por trás: `StartRouting` + polling de `CheckRouting` (≥ 2s). O polling é incremental —',
-      'resultados já devolvidos não voltam, então a acumulação é nossa.',
+      'O pedido usa `departure`/`arrival` em ida e ida-e-volta — a data da volta vai em',
+      '`arrival.date` — e `segments[]` no multidestino, com a lista COMPLETA de trechos.',
+      '',
+      '🔴 A chave de venda é `fares[].fareId`, não `identifier`. O `identifier` do trecho é a',
+      'journey da companhia; quem segue para tarifar e reservar é a tarifa.',
     ].join('\n'),
   })
   @ApiBody({ type: AvailabilityDto })
@@ -95,13 +99,18 @@ export class FlightController {
   @ApiOperation({
     summary: 'Tarifar — confirmar o preço firme',
     description: [
-      'Mapeia para `ProcessDetails`.',
+      'Mapeia para `OfferPrice`.',
       '',
-      'Devolve também `requiredParameters[]` — os CSPs que o provedor vai exigir,',
-      'bagagem incluída, já parseados do `DisplayText`. Guarde: o `ProcessTerms` é',
-      '**único** e não haverá segunda chance de perguntar.',
+      'O corpo leva `offers[]` — uma seleção por journey; num pacote fechado, uma só cobre',
+      'a viagem inteira. O único campo que decide a venda é `fareId`: os outros são contexto',
+      'de auditoria e **não** substituem a chave.',
+      '',
+      'A resposta é PLANA (`base`, `taxes`, `total`), não aninhada em `price`: o tarifar',
+      'devolve um preço só, e repetir a estrutura da busca faria descer dois níveis para',
+      'ler um número.',
     ].join('\n'),
   })
+  @ApiBody({ type: QuoteDto })
   @ApiResponse({ status: 200, description: 'Preço firme e parâmetros exigidos pelo provedor.' })
   async tarifar(@Body() dto: QuoteDto, @Req() request: FlightRequest) {
     return this.quote.execute(dto, contextOf(request));
@@ -115,54 +124,49 @@ export class FlightController {
   @ApiOperation({
     summary: 'Reservar',
     description: [
-      'Mapeia para `ProcessTerms` (**um só**) → `StartBooking` → polling de `CheckBooking`.',
+      'Mapeia para `OrderCreate`. Segura o assento e **não cobra nada**.',
+      '',
+      '🔴 `people` é um MAPA, com o PaxID na chave (`ADT_1`, `CHD_1`). Não é enfeite: é o',
+      'PaxID que amarra tarifa, assento, bagagem e bilhete ao passageiro certo, e a oferta',
+      'foi tarifada com uma lista específica. Uma lista posicional funciona até o primeiro',
+      'pedido com criança.',
       '',
       '🔴 `committed` ≠ `confirmed`. `committed:true` diz que a reserva foi aceita pelo',
-      'provedor; `confirmed` só vira `true` quando o status final `Succeeded` chega, e',
-      '**nunca é deduzido** de `committed`. Status não-final (`BookingInProgress`,',
-      '`Unconfirmed`) não autoriza re-reservar — a reserva pode existir do outro lado.',
+      'provedor; `confirmed` só vira `true` no status final de sucesso, e **nunca é',
+      'deduzido** de `committed`. Status não-final não autoriza re-reservar — a reserva',
+      'pode existir do outro lado.',
       '',
       'Devolve **HTTP 201**; todas as outras rotas devolvem 200.',
     ].join('\n'),
   })
+  @ApiBody({ type: CreateBookingDto })
   @ApiResponse({ status: 201, description: 'Reserva criada. Guarde o locator.' })
   async reservar(@Body() dto: CreateBookingDto, @Req() request: FlightRequest) {
     return this.booking.execute(dto, contextOf(request));
   }
 
-  /**
-   * 🔴 O /retrieve NÃO usa o envelope de três chaves: tem chaves próprias
-   * (connector, booking, status, message) e `status` só assume `"found"`.
-   * Qualquer outro cenário é erro, com o corpo de erro padrão.
-   */
   @Post('retrieve')
   @Capability('retrieve')
-  @RawResponse()
   @ApiTags('Pós-venda')
   @ApiOperation({
     summary: 'Consultar a reserva',
     description: [
-      'Mapeia para `CheckBooking`. **Sem cache** — toda chamada vai à companhia,',
+      'Mapeia para `OrderRetrieve`. **Sem cache** — toda chamada vai à companhia,',
       'porque o ponto da rota é saber o estado *agora*.',
       '',
-      '🔴 Esta rota tem envelope próprio, e `status` só assume `"found"`.',
+      'Esta rota usava um envelope PRÓPRIO, de seis chaves. Agora usa o mesmo',
+      '`{success, data, meta}` das outras — era exatamente o tipo de exceção que obrigava',
+      'quem consome a escrever um caminho especial por rota.',
       '',
-      'Todas as chaves de `data` existem sempre, com `null` onde a Travelfusion não',
-      'informa: o `CheckBooking` não devolve os trechos, então `trip`, `segments` e',
-      '`itinerary` vêm `null`.',
+      '🔴 `segments.journeys` é a lista COMPLETA das pernas. Em multidestino `departure` e',
+      '`return` vêm `null` de propósito: eleger a primeira perna como "ida" inventaria uma',
+      'ida-e-volta que ninguém comprou.',
     ].join('\n'),
   })
+  @ApiBody({ type: RetrieveDto })
   @ApiResponse({ status: 200, description: 'Reserva encontrada.' })
   async consultar(@Body() dto: RetrieveDto, @Req() request: FlightRequest) {
-    const { locator, connector, data } = await this.retrieve.execute(dto, contextOf(request));
-    return {
-      success: true,
-      connector,
-      booking: locator,
-      status: 'found',
-      message: 'Booking retrieved successfully',
-      data,
-    };
+    return this.retrieve.execute(dto, contextOf(request));
   }
 
   @Post('fare-rules')
@@ -178,8 +182,12 @@ export class FlightController {
       'devolve exatamente como recebeu — nunca monta, nunca interpreta.',
       '',
       '🔴 Chave que não abre é erro de **quem chamou**: 400, e a chamada nem vai à companhia.',
+      '',
+      'A LATAM responde **501**: a NDC devolve penalidade estruturada, não o texto integral',
+      'da tarifa. Publicar aquilo como "condições" seria dizer que é o que não é.',
     ].join('\n'),
   })
+  @ApiBody({ type: FareRulesDto })
   async regras(@Body() dto: FareRulesDto, @Req() request: FlightRequest) {
     return this.fareRules.execute(dto, contextOf(request));
   }
@@ -191,23 +199,19 @@ export class FlightController {
   @ApiOperation({
     summary: 'Testar a credencial',
     description: [
-      'Mapeia para `Login`.',
+      'Na LATAM, o próprio OAuth2 prova a credencial: um token novo só sai com Key e',
+      'Secret válidos.',
       '',
-      '🔴 Aqui o `Login` é sempre real — servir o `LoginId` do cache responderia',
-      '"ok" sem falar com a companhia. Quem protege o limite diário de `Login` da',
-      'Travelfusion é o teto de **10 tentativas por minuto** do contrato (429).',
+      '🔴 A sonda é sempre real — servir um token do cache responderia "ok" sem falar com',
+      'a companhia. Quem protege o limite é o teto de **10 tentativas por minuto** (429).',
       '',
-      '`verification.scope` é `connection`: o `Login` valida a credencial da',
-      'integração, não as chaves enviadas em `ping.credentials`.',
+      '`verification.scope` é `connection`: valida a credencial da integração, não as',
+      'chaves enviadas em `ping.credentials`.',
     ].join('\n'),
   })
   async ping(@Body() dto: PingDto, @Req() request: FlightRequest) {
     return this.pingProbe.execute(dto, contextOf(request));
   }
-
-  // ── Rotas que existem no contrato e a Travelfusion não atende ───────────────
-  // Registradas de propósito: 501 documentado é melhor do que 404, porque diz a
-  // quem consome que a operação existe e o problema é este provedor.
 
   @Post('cancel-booking')
   @Capability('cancelBooking')
@@ -223,11 +227,14 @@ export class FlightController {
       'porque o segundo exige `ExpectedRefundAmount`. O reshop é read-only — se ele falhar,',
       'nada foi cancelado.',
       '',
-      '`cancelled: false` com `status: "pending"` significa **aceito, ainda não fechado**.',
-      'Não é falha, e não autoriza tentar de novo: consulte o `/retrieve`.',
+      '🔴 `outcome` NÃO é o status: `VOID` anula o bilhete e não devolve dinheiro, `REFUND`',
+      'devolve. Quem atende o passageiro precisa dos dois para explicar o que aconteceu.',
       '',
-      'A Travelfusion responde **501**: lá o `StartBooking` já cobra, então cancelar seria',
-      'estorno, coisa que o Direct Connect não expõe.',
+      '🔴 `eticketsCancelled` é `false` até o CUPOM provar o contrário — o `OrderCancelRS`',
+      'de sucesso não diz nada sobre documento.',
+      '',
+      '`status: "PENDING"` significa **aceito, ainda não fechado**. Não é falha, e não',
+      'autoriza tentar de novo: consulte o `/retrieve`.',
     ].join('\n'),
   })
   @ApiBody({ type: CancelBookingDto })
@@ -244,15 +251,18 @@ export class FlightController {
     description: [
       'Read-only: não marca nada.',
       '',
-      '🔴 **Divergência consciente do contrato canônico.** O `09-assentos.md` endereça o mapa',
+      '🔴 **Divergência consciente, e a única do dialeto.** O modelo canônico endereça o mapa',
       'pelo LOCALIZADOR, assumindo escolha pós-reserva. Na LATAM o `/seats/availability`',
-      'responde pela OFERTA — a escolha é anterior, e o localizador ainda não existe.',
+      'responde pela OFERTA — a escolha é anterior, e o localizador ainda não existe. Por',
+      'isso o corpo leva `fareId`, e `locator` volta `null`.',
+      '',
+      'O caso do modelo continua atendido pelo `/order-seat-map`, que responde pela reserva.',
       '',
       'Mapa ilegível degrada para `segments: []`, nunca 500: a leitura degrada, a mutação falha.',
     ].join('\n'),
   })
-  @ApiBody({ type: SeatMapDto })
-  async seatMap(@Body() dto: SeatMapDto, @Req() request: FlightRequest) {
+  @ApiBody({ type: OfferCatalogDto })
+  async seatMap(@Body() dto: OfferCatalogDto, @Req() request: FlightRequest) {
     return this.seats.execute(dto, contextOf(request));
   }
 
@@ -269,9 +279,9 @@ export class FlightController {
     description: [
       'Read-only. Endereçado pelo LOCALIZADOR, ao contrário do /seat-map, que responde pela oferta.',
       '',
-      '🔴 **Não é o mesmo catálogo.** Os `offerItemId` daqui (`SEAT_…`) são os únicos que o',
-      '/sell-ancillaries aceita; os do /seat-map (`SEI|…`) morrem na emissão. Usar um no lugar',
-      'do outro faz a companhia recusar com `INVALID_OFFER_TYPES`.',
+      '🔴 **Não é o mesmo catálogo.** As chaves daqui são as únicas que o /sell-ancillaries',
+      'aceita; as do /seat-map morrem na emissão. Usar uma no lugar da outra faz a companhia',
+      'recusar com `INVALID_OFFER_TYPES`.',
     ].join('\n'),
   })
   @ApiBody({ type: OrderCatalogDto })
@@ -293,26 +303,27 @@ export class FlightController {
     return this.postSale.ancillaries(dto, contextOf(request));
   }
 
-  /**
-   * 🔴 Marcar assento e comprar assento são a MESMA operação na LATAM: o
-   * assento é confirmado no mesmo pedido em que é cobrado, e não existe
-   * segurá-lo sem pagar. Esta rota existe porque o contrato canônico a prevê,
-   * e delega para o /sell-ancillaries em vez de fingir uma etapa que não há.
-   */
   @Post('mark-seats')
   @Capability('markSeats')
-  @Operation('sellAncillaries')
+  @Operation('markSeats')
   @ApiTags('Assentos')
   @ApiOperation({
     summary: 'Marcar assentos na reserva emitida',
     description: [
       '🔴 **Cobra o cartão.** Não é idempotente e não tem retry: na LATAM marcar e pagar o',
-      'assento é um pedido só. Mesmo corpo e mesma resposta do /sell-ancillaries.',
+      'assento são um pedido só, e não existe segurar o lugar sem pagar.',
+      '',
+      'O assento é endereçado pelo DESIGNADOR (`12A`) mais o trecho — o que a pessoa',
+      'escolheu na tela. A tradução para a chave que a companhia vende acontece do lado de',
+      'cá, relendo o mapa da própria reserva.',
+      '',
+      '🔴 Assento fora do mapa é recusado ANTES da rede: melhor não oferecer do que oferecer',
+      'e falhar depois.',
     ].join('\n'),
   })
-  @ApiBody({ type: SellAncillariesDto })
-  async markSeats(@Body() dto: SellAncillariesDto, @Req() request: FlightRequest) {
-    return this.postSale.execute(dto, contextOf(request));
+  @ApiBody({ type: MarkSeatsDto })
+  async markSeats(@Body() dto: MarkSeatsDto, @Req() request: FlightRequest) {
+    return this.postSale.markSeats(dto, contextOf(request));
   }
 
   /** DELETE com corpo — é assim no contrato. */
@@ -320,7 +331,8 @@ export class FlightController {
   @Capability('removeSeats')
   @ApiTags('Não suportado pelo provedor')
   @ApiOperation(NOT_SUPPORTED_ROUTES.removeSeats)
-  removeSeats(): never { throw notSupported('removeSeats'); }
+  @ApiBody({ type: RemoveSeatsDto })
+  removeSeats(@Body() _dto: RemoveSeatsDto): never { throw notSupported('removeSeats'); }
 
   @Post('ancillaries')
   @Capability('ancillaries')
@@ -331,12 +343,17 @@ export class FlightController {
     description: [
       'Read-only. Endereçado pela OFERTA, como o /seat-map — mesma divergência, mesma razão.',
       '',
-      'Assentos são filtrados fora: eles vêm no /seat-map, com fileira e coluna. A Travelfusion',
-      'responde 501 porque lá os opcionais já saem no /quote, em requiredParameters.',
+      'Devolve o catálogo completo: `passengers`, `segments` e `offers`. Sem os dois',
+      'primeiros, as ofertas viriam amarradas a ids que quem consome não sabe traduzir.',
+      '',
+      'Assentos são filtrados fora: eles vêm no /seat-map, com fileira e coluna.',
+      '',
+      '🔴 Oferta sem `passengerId`/`segmentId` vale para TODOS — `null` ali significa "a',
+      'viagem inteira", não "nenhum", e os filtros do pedido respeitam isso.',
     ].join('\n'),
   })
-  @ApiBody({ type: SeatMapDto })
-  async ancillaries(@Body() dto: SeatMapDto, @Req() request: FlightRequest) {
+  @ApiBody({ type: AncillariesDto })
+  async ancillaries(@Body() dto: AncillariesDto, @Req() request: FlightRequest) {
     return this.extras.execute(dto, contextOf(request));
   }
 
@@ -350,12 +367,13 @@ export class FlightController {
       '🔴 **Cobra o cartão. Não é idempotente e não tem retry.** Se a resposta se perder, o',
       'caminho é o /retrieve — nunca repetir o pedido.',
       '',
-      'O valor cobrado NÃO vem do corpo: é somado a partir do catálogo da própria reserva. Quem',
-      'chama escolhe os itens; o preço é da companhia.',
+      'O valor cobrado NÃO vem do corpo: é somado a partir do catálogo da própria reserva.',
+      'Quem chama escolhe os itens; o preço é da companhia.',
       '',
-      'Exige reserva EMITIDA. Numa reserva ainda não paga, pague primeiro pelo /issue.',
+      'Cada item usa a `key` opaca vinda do catálogo POR RESERVA, devolvida intacta.',
       '',
-      'Cartão é dispensável só quando os opcionais escolhidos somam zero — assento cortesia.',
+      'Exige reserva EMITIDA. Cartão é dispensável só quando os opcionais somam zero —',
+      'assento cortesia, que a companhia liquida por BSP.',
     ].join('\n'),
   })
   @ApiBody({ type: SellAncillariesDto })
@@ -367,7 +385,8 @@ export class FlightController {
   @Capability('paymentOptions')
   @ApiTags('Não suportado pelo provedor')
   @ApiOperation(NOT_SUPPORTED_ROUTES.paymentOptions)
-  paymentOptions(): never { throw notSupported('paymentOptions'); }
+  @ApiBody({ type: PaymentOptionsDto })
+  paymentOptions(@Body() _dto: PaymentOptionsDto): never { throw notSupported('paymentOptions'); }
 
   @Post('financing-options')
   @Capability('financingOptions')
@@ -378,8 +397,9 @@ export class FlightController {
     description: [
       'Read-only: consulta a operadora, não cobra nada.',
       '',
-      '🔴 O `card` é o **número do cartão**. Ele existe no corpo porque a operadora precisa dele',
-      'para calcular as parcelas — e **não é logado, não é guardado e não volta na resposta**.',
+      '🔴 `payment.creditCard.number` é o **número do cartão**. Ele existe no corpo porque a',
+      'operadora precisa dele para calcular as parcelas — e **não é logado, não é guardado e',
+      'não volta na resposta**.',
       '',
       'Lista vazia é resposta válida: o cartão pode não aceitar parcelamento.',
     ].join('\n'),
@@ -397,19 +417,20 @@ export class FlightController {
     summary: 'Pagar a reserva',
     description: [
       'Mapeia para `OrderChange` com `PaymentFunctions` — paga uma ordem que já existe.',
-      'Não confundir com `/order/create/payment`, que cria e paga de uma vez.',
       '',
       '🔴 **Mutação não idempotente e sem retry.** Cobrar duas vezes é o pior erro possível.',
       'Se a resposta se perder, o caminho é o `/retrieve` — nunca pagar de novo.',
       '',
-      '🔴 O valor cobrado é **perguntado à companhia**, não aceito do corpo. `amount` é opcional',
-      'e serve como declaração do que quem chama espera: se divergir, a cobrança não acontece',
-      'e a resposta é `FARE_PRICE_CHANGED`.',
+      '🔴 O valor cobrado é **perguntado à companhia**, não aceito do corpo.',
+      '`payment.billedAmount` é opcional e serve como declaração do que quem chama espera:',
+      'se divergir, a cobrança não acontece e a resposta é `FARE_PRICE_CHANGED`.',
       '',
-      '`issued: false` com `status: "pending"` significa aceito e ainda não fechado — consulte',
-      'o `/retrieve`, não repita o pagamento.',
+      '🔴 A prova de emissão é o NÚMERO DO BILHETE, não o status. `confirmed: null` quer',
+      'dizer que a companhia ainda não fechou e a prova não existe — consulte o `/retrieve`,',
+      'não repita o pagamento.',
       '',
-      'A Travelfusion responde **501**: lá o `StartBooking` já cobra, e não há o que emitir depois.',
+      '`tickets[]` e `emds[]` são listas separadas: documento de voo e de serviço têm ciclos',
+      'de vida diferentes, e anular um não anula o outro.',
     ].join('\n'),
   })
   @ApiBody({ type: IssueDto })
@@ -421,13 +442,15 @@ export class FlightController {
   @Capability('retrieveEticket')
   @ApiTags('Não suportado pelo provedor')
   @ApiOperation(NOT_SUPPORTED_ROUTES.retrieveEticket)
-  retrieveEticket(): never { throw notSupported('retrieveEticket'); }
+  @ApiBody({ type: RetrieveEticketDto })
+  retrieveEticket(@Body() _dto: RetrieveEticketDto): never { throw notSupported('retrieveEticket'); }
 
   @Post('cancel-eticket')
   @Capability('cancelEticket')
   @ApiTags('Não suportado pelo provedor')
   @ApiOperation(NOT_SUPPORTED_ROUTES.cancelEticket)
-  cancelEticket(): never { throw notSupported('cancelEticket'); }
+  @ApiBody({ type: CancelEticketDto })
+  cancelEticket(@Body() _dto: CancelEticketDto): never { throw notSupported('cancelEticket'); }
 }
 
 export { ERROR_RESPONSES };

@@ -1,17 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { AppError } from '../../../common/errors/app-error';
 import { roundMoney } from '../../../common/utils/money';
-import { passengerTypeCode } from '../../../common/utils/age';
+import { durationFromIso } from '../../../common/utils/duration';
 import { OfferKey } from '../../../common/utils/offer-key';
 import { LATAM } from '../../../config/env';
-import { AvailabilityDto } from '../../flight/dto/availability.dto';
-import { CreateBookingDto, QuoteDto } from '../../flight/dto/booking.dto';
+import { AvailabilityDto, legsOf, passengersOf } from '../../flight/dto/availability.dto';
+import { BookingPersonDto, CreateBookingDto, QuoteDto } from '../../flight/dto/booking.dto';
 import {
-  FareRuleSection, FlightProvider, ProviderBooking, ProviderOffer, ProviderProbe, ProviderQuote,
-  ProviderAncillary,
-  ProviderAncillaryPurchase,
-  ProviderAncillaryPurchaseResult, ProviderCancellation, ProviderFinancing, ProviderIssue, ProviderPayment,
-  ProviderRetrieval, ProviderSeatMap, RequestContext,
+  FareRuleSection, FlightProvider, ProviderAncillaryCatalog, ProviderAncillaryPurchase,
+  ProviderAncillaryPurchaseResult, ProviderBooking, ProviderCancellation, ProviderFinancing,
+  ProviderIssue, ProviderOffer, ProviderPassenger, ProviderPayment, ProviderProbe, ProviderQuote,
+  ProviderRetrieval, ProviderSeatMap, ProviderTicket, RequestContext,
 } from '../provider.types';
 import { asList, attr, child, num, text, XmlValue } from '../../../common/xml/xml.util';
 import { buildPaxList, LatamCommands } from './latam.commands';
@@ -22,33 +21,10 @@ import { normalizeServiceList } from './normalizers/service.normalizer';
 /**
  * Status de ordem da LATAM que são FINAIS. Só eles autorizam dizer `confirmed`.
  * `PENDING`/`IN_PROGRESS` são reserva viva, não falha — e não autorizam
- * re-reservar (01-convencoes.md §7).
+ * re-reservar.
  */
 const CONFIRMED_STATUSES = new Set(['CLOSED', 'CONFIRMED', 'TICKETED']);
 const FAILED_STATUSES = new Set(['FAILED', 'REJECTED', 'CANCELLED']);
-
-/**
- * Os números de bilhete, venham de onde vierem.
- *
- * 🔴 A LATAM devolve `TicketDocInfo` em DOIS lugares e com DOIS nomes de campo:
- * solto na resposta (`Ticket/TicketNumber`, é o caso do pagamento e da leitura
- * da ordem) ou dentro de `DataLists/TicketDocInfoList` (`TicketDocNbr`). Ler só
- * o segundo, que é o que a amostra mostra, fazia o `/issue` devolver `[]` numa
- * emissão que tinha bilhete.
- */
-function readTickets(payload: XmlValue): string[] {
-  const nodes = [
-    ...asList(child(payload, 'DataLists', 'TicketDocInfoList', 'TicketDocInfo')),
-    ...asList(child(payload, 'TicketDocInfo')),
-  ];
-
-  const numbers = nodes.flatMap((node) => [
-    text(child(node, 'TicketDocNbr')),
-    text(child(node, 'Ticket', 'TicketNumber')),
-  ]);
-
-  return [...new Set(numbers.filter((number): number is string => Boolean(number)))];
-}
 
 /**
  * 🔴 O cancelamento NÃO aparece no status da ordem: um bilhete anulado continua
@@ -58,24 +34,102 @@ function readTickets(payload: XmlValue): string[] {
  */
 const VOIDED_COUPONS = new Set(['VOID', 'V', 'REFUND', 'REFUNDED']);
 
-function isVoided(payload: XmlValue): boolean {
-  const nodes = [
+/** `<Amount CurCode="BRL">123</Amount>` → número + moeda. */
+const amount = (node: XmlValue): { value: number | null; currency: string | null } => ({
+  value: num(node),
+  currency: attr(node, 'CurCode'),
+});
+
+/** O contrato só conhece `adult`/`child`/`infant`; a NDC fala PTC. */
+const PTC_BY_AGE_GROUP: Record<string, string> = {
+  adult: 'ADT', child: 'CHD', infant: 'INF',
+};
+
+/**
+ * 🔴 `IdentityDocTypeCode` no Brasil é `I`, não `CPF`. A doc diz `CPF` e o
+ * gateway responde `400300012 IdentityDocTypeCode value must be I for Brazil`.
+ * Passaporte é `P`; o resto cai em `I`, que é o documento local.
+ */
+const DOC_TYPE_CODE: Record<string, string> = {
+  PASSPORT: 'P', CPF: 'I', RG: 'I', RNE: 'I', RNM: 'I', MERCOSUR: 'I',
+};
+
+/**
+ * Os nós de bilhete, venham de onde vierem.
+ *
+ * 🔴 A LATAM devolve `TicketDocInfo` em DOIS lugares e com DOIS nomes de campo:
+ * solto na resposta (`Ticket/TicketNumber`, é o caso do pagamento e da leitura
+ * da ordem) ou dentro de `DataLists/TicketDocInfoList` (`TicketDocNbr`). Ler só
+ * o segundo, que é o que a amostra mostra, fazia o `/issue` devolver `[]` numa
+ * emissão que tinha bilhete.
+ */
+function ticketNodes(payload: XmlValue): XmlValue[] {
+  return [
     ...asList(child(payload, 'DataLists', 'TicketDocInfoList', 'TicketDocInfo')),
     ...asList(child(payload, 'TicketDocInfo')),
   ];
+}
 
-  const coupons = nodes.flatMap((node) => asList(child(node, 'Ticket', 'Coupon')));
+function couponStatus(node: XmlValue): string | null {
+  const coupons = asList(child(node, 'Ticket', 'Coupon'));
+  const statuses = coupons
+    .map((coupon) => text(child(coupon, 'CouponStatusCode')))
+    .filter((status): status is string => Boolean(status));
+
+  return statuses[0] ?? null;
+}
+
+/**
+ * Um `TicketDocInfo` no vocabulário do contrato.
+ *
+ * 🔴 `TicketDocTypeCode = J` é EMD, não bilhete de voo. Os dois têm ciclos de
+ * vida diferentes — anular a passagem não anula a bagagem comprada — e o
+ * contrato os publica em listas separadas justamente por isso.
+ */
+function normalizeTicket(node: XmlValue): ProviderTicket {
+  const raw = couponStatus(node);
+  const upper = (raw ?? '').toUpperCase();
+  const typeCode = (text(child(node, 'TicketDocTypeCode')) ?? '').toUpperCase();
+
+  const status: ProviderTicket['status'] = upper === ''
+    ? null
+    : VOIDED_COUPONS.has(upper)
+      ? (upper.startsWith('REFUND') ? 'refunded' : 'voided')
+      : 'issued';
+
+  const value = amount(child(node, 'Ticket', 'TotalAmount') ?? child(node, 'TotalAmount'));
+
+  return {
+    ticketNumber: text(child(node, 'TicketDocNbr')) ?? text(child(node, 'Ticket', 'TicketNumber')),
+    type: typeCode === 'J' ? 'other' : 'flight',
+    passengerId: text(child(node, 'PaxRefID')),
+    passengerName: null,
+    status,
+    providerStatus: raw,
+    issueDate: text(child(node, 'IssueDate')) ?? text(child(node, 'Ticket', 'IssueDate')),
+    amount: value.value === null
+      ? null
+      : { total: roundMoney(value.value) ?? value.value, currency: value.currency },
+  };
+}
+
+const readTickets = (payload: XmlValue): ProviderTicket[] =>
+  ticketNodes(payload).map(normalizeTicket).filter((ticket) => ticket.ticketNumber !== null);
+
+function isVoided(payload: XmlValue): boolean {
+  const coupons = ticketNodes(payload).flatMap((node) => asList(child(node, 'Ticket', 'Coupon')));
   if (coupons.length === 0) return false;
 
   // TODOS os cupons: um trecho anulado num bilhete de dois não cancela a viagem.
   return coupons.every((coupon) => VOIDED_COUPONS.has((text(child(coupon, 'CouponStatusCode')) ?? '').toUpperCase()));
 }
 
-/** `<Amount CurCode="BRL">123</Amount>` → número + moeda. */
-const amount = (node: XmlValue): { value: number | null; currency: string | null } => ({
-  value: num(node),
-  currency: attr(node, 'CurCode'),
-});
+/** Avisos crus da companhia — publicados como vieram, nunca reescritos. */
+function readMessages(payload: XmlValue): string[] {
+  return asList(child(payload, 'MarketingMessage'))
+    .map((message) => text(child(message, 'Desc', 'DescText')))
+    .filter((value): value is string => Boolean(value));
+}
 
 @Injectable()
 export class LatamProvider implements FlightProvider {
@@ -107,8 +161,8 @@ export class LatamProvider implements FlightProvider {
     return {
       // O OAuth2 é endpoint de autenticação dedicado: o token PROVA a credencial.
       method: 'auth',
-      // Como na Travelfusion: valida a credencial da INTEGRAÇÃO, não a que veio
-      // no corpo do ping — credencial por request está fora do escopo.
+      // Valida a credencial da INTEGRAÇÃO, não a que veio no corpo do ping —
+      // credencial por request está fora do escopo.
       scope: 'connection',
     };
   }
@@ -121,11 +175,7 @@ export class LatamProvider implements FlightProvider {
    * de uso tratar os dois provedores sem saber qual é qual.
    */
   async *search(request: AvailabilityDto, context: RequestContext): AsyncGenerator<ProviderOffer[]> {
-    const passengers = {
-      adults: request.passengers.adults,
-      children: request.passengers.children ?? 0,
-      babies: request.passengers.babies ?? 0,
-    };
+    const passengers = passengersOf(request);
 
     /**
      * 🔴 A cabine NÃO vai para o AirShopping, e isso é medido, não preferência:
@@ -133,16 +183,15 @@ export class LatamProvider implements FlightProvider {
      * que, sem o filtro, devolve 424 — 12 delas business. Mandar o critério
      * para cima esconde oferta que existe.
      *
-     * O filtro de cabine acontece na camada do contrato
-     * (`AvailabilityService.applyOptionFilters`), que vê a tarifa já normalizada
-     * e vale igual para os dois provedores.
+     * O filtro de cabine acontece na camada do contrato, que vê a tarifa já
+     * normalizada e vale igual para os dois provedores.
      */
     const { payload } = await this.commands.airShopping(
-      { legs: request.legs, passengers, cabin: null },
+      { legs: legsOf(request), passengers, cabin: null },
       context,
     );
 
-    const passengerCount = Math.max(1, passengers.adults + passengers.children + passengers.babies);
+    const passengerCount = Math.max(1, passengers.adults + passengers.children + passengers.infants);
 
     // A MESMA lista de PaxIDs que foi para o AirShopping entra na chave de cada
     // oferta: o OfferPrice exige recebê-la de volta, e o /quote só tem a chave.
@@ -167,10 +216,25 @@ export class LatamProvider implements FlightProvider {
     const base = amount(child(total, 'BaseAmount'));
     const tax = amount(child(total, 'TaxSummary', 'TotalTaxAmount'));
 
+    // A família confirmada pelo OfferPrice — é ela que vale, não a da busca.
+    const priceClass = asList(child(payload, 'DataLists', 'PriceClassList', 'PriceClass'))[0];
+    const familyText = asList(child(offer, 'OfferItem'))
+      .flatMap((item) => asList(child(item, 'FareDetail')))
+      .map((detail) => text(child(detail, 'FareRefText')))
+      .find(Boolean) ?? null;
+
     return {
+      /**
+       * A LATAM tarifou e devolveu preço: a oferta existe. Recusa vem como erro
+       * do gateway e vira 409 no catálogo — nunca um 200 com `available: false`.
+       */
+      available: true,
+      familyCode: text(child(priceClass, 'Code')),
+      family: text(child(priceClass, 'Name')) ?? familyText,
       price: {
         base: roundMoney(base.value ?? 0),
-        taxes: { boarding: roundMoney(tax.value ?? 0), service: 0, fuel: 0, baggage: 0 },
+        // Escalar: a LATAM não discrimina imposto no tarifar, só soma.
+        taxes: roundMoney(tax.value ?? 0),
         fees: 0,
         total: roundMoney(value.value),
         currency: value.currency ?? base.currency ?? 'BRL',
@@ -184,8 +248,8 @@ export class LatamProvider implements FlightProvider {
       requiredParameters: [
         { name: 'firstName', type: 'string', displayText: 'Nome', perPassenger: true, optional: false, options: [] },
         { name: 'lastName', type: 'string', displayText: 'Sobrenome', perPassenger: true, optional: false, options: [] },
-        { name: 'dateOfBirth', type: 'date', displayText: 'Data de nascimento', perPassenger: true, optional: false, options: [] },
-        { name: 'documentNumber', type: 'string', displayText: 'Documento', perPassenger: true, optional: false, options: [] },
+        { name: 'birthDate', type: 'date', displayText: 'Data de nascimento', perPassenger: true, optional: false, options: [] },
+        { name: 'document', type: 'string', displayText: 'Documento', perPassenger: true, optional: false, options: [] },
         { name: 'email', type: 'email', displayText: 'E-mail de contato', perPassenger: false, optional: false, options: [] },
         { name: 'phone', type: 'string', displayText: 'Telefone de contato', perPassenger: false, optional: false, options: [] },
       ],
@@ -193,38 +257,30 @@ export class LatamProvider implements FlightProvider {
   }
 
   async book(key: OfferKey, dto: CreateBookingDto, context: RequestContext): Promise<ProviderBooking> {
-    // 🔴 O PTC sai da idade na data do VOO, nao de um campo que o cliente manda:
-    // a LATAM recusa a ordem quando o PTC nao bate com o Birthdate, e a oferta ja
-    // foi tarifada com uma contagem especifica de ADT/CHD/INF.
-    const referenceDate = dto.referenceDate ?? new Date().toISOString();
-    const counters: Record<string, number> = { ADT: 0, CHD: 0, INF: 0 };
+    const email = dto.customer.email;
+    const phone = dto.customer.phone;
 
     /**
-     * E-mail e telefone são CSPs do nível da RESERVA (o /quote os declara com
-     * `perPassenger: false`), mas a NDC quer um ContactInfo por passageiro —
-     * então o mesmo contato é replicado, um por PaxID.
-     *
      * 🔴 A LATAM EXIGE o contato: sem ele o OrderCreate volta
      * `912 ContactInfoList is null or empty`. E omitir só a referência para
      * fugir disso troca um erro por outro — vira
      * `cvc-identity-constraint.4.3: Key 'ContactInfoIDKeyRef13' not found`.
-     * Os dois são a mesma coisa dita de dois jeitos: contato é obrigatório.
      *
      * Por isso a recusa acontece AQUI, antes da rede, com o campo que falta
      * nomeado — do mesmo jeito que a credencial em branco falha no client.
      */
-    const email = dto.customParameters?.email;
-    const phone = dto.customParameters?.phone;
-
     if (!email && !phone) {
       throw new AppError('SEARCH_VALIDATION_ERROR', {
         metadata: { operation: 'createBooking' },
-        details: {
-          errors: {
-            'customParameters.email': ['Obrigatório: a LATAM exige contato para criar a ordem.'],
-            'customParameters.phone': ['Obrigatório: a LATAM exige contato para criar a ordem.'],
-          },
-        },
+        details: { errors: { 'customer.email': ['Obrigatório: a LATAM exige contato para criar a ordem.'] } },
+      });
+    }
+
+    const people = Object.entries(dto.people);
+    if (people.length === 0) {
+      throw new AppError('SEARCH_VALIDATION_ERROR', {
+        metadata: { operation: 'createBooking' },
+        details: { errors: { people: ['Obrigatório: ao menos um passageiro.'] } },
       });
     }
 
@@ -233,37 +289,44 @@ export class LatamProvider implements FlightProvider {
      * `IdentityDoc`, `Individual`, `PaxID`, `PTC` — e dentro do Individual,
      * `Birthdate` antes do nome. Fora dessa sequência a LATAM devolve
      * `cvc-complex-type.2.4.a` sem dizer qual campo está no lugar errado.
+     *
+     * 🔴 O PaxID é a CHAVE do mapa, não um contador nosso. A oferta foi tarifada
+     * com uma lista específica de PaxIDs e o `SelectedOfferItem` referencia
+     * exatamente ela — renumerar aqui produz `PaxIDKeyRef` não encontrada.
      */
-    const paxList = dto.passengers.map((passenger) => {
-      const ptc = passengerTypeCode(passenger.dateOfBirth, referenceDate);
-      counters[ptc] += 1;
-      const paxId = `${ptc}_${counters[ptc]}`;
-      const document = passenger.customParameters?.documentNumber;
+    const paxList = people.map(([paxId, person]: [string, BookingPersonDto]) => {
+      const ptc = PTC_BY_AGE_GROUP[person.ageGroup] ?? paxId.split('_')[0].toUpperCase();
+      const document = person.document;
 
       return {
         ContactInfoRefID: `${paxId}_CNT`,
         IdentityDoc: document
-          ? { IdentityDocID: document, IdentityDocTypeCode: 'P' }
+          ? {
+              IdentityDocID: document.number,
+              IdentityDocTypeCode: DOC_TYPE_CODE[document.type.toUpperCase()] ?? 'I',
+            }
           : undefined,
         Individual: {
-          Birthdate: passenger.dateOfBirth,
-          GivenName: passenger.firstName,
+          Birthdate: person.birthDate,
+          GivenName: person.firstName,
           // Chave `IndividualIDKey` do XSD: sem ela a ordem é recusada.
           IndividualID: `IND_${paxId}`,
-          Surname: passenger.lastName,
+          Surname: person.lastName,
         },
         PaxID: paxId,
         PTC: ptc,
       };
     });
 
-    // Um ContactInfo por PaxID, todos apontando para o mesmo contato da reserva.
+    /**
+     * Um ContactInfo por PaxID, todos apontando para o mesmo contato da reserva.
+     * E-mail e telefone são do nível da RESERVA (o /quote os declara com
+     * `perPassenger: false`), mas a NDC quer um ContactInfo por passageiro.
+     */
     const contacts = paxList.map((pax) => ({
       ContactInfoID: `${pax.PaxID}_CNT`,
       EmailAddress: email ? { EmailAddressText: email } : undefined,
-      Phone: phone
-        ? { ContactTypeText: 'MOBILE', PhoneNumber: phone.replace(/\D/g, '') }
-        : undefined,
+      Phone: phone ? { ContactTypeText: 'MOBILE', PhoneNumber: phone.replace(/\D/g, '') } : undefined,
     }));
 
     const { payload } = await this.commands.orderCreate(key.r, key.i ?? null, paxList, contacts, context);
@@ -369,13 +432,34 @@ export class LatamProvider implements FlightProvider {
       ? null
       : { total: roundMoney(refunded.value) ?? refunded.value, currency: refunded.currency });
 
+    const cancelled = FAILED_STATUSES.has(status) || voided;
+
     return {
       locator,
       // Só os status finais de falha significam cancelado de verdade.
-      status: FAILED_STATUSES.has(status) || voided ? 'cancelled' : 'pending',
+      status: cancelled ? 'cancelled' : 'pending',
+      /**
+       * O EFEITO, que não é o status: quem anulou o bilhete não recebe dinheiro
+       * de volta, e quem foi reembolsado não teve o documento anulado. Quem
+       * atende o passageiro precisa dos dois para explicar o que aconteceu.
+       */
+      outcome: !cancelled
+        ? 'UNKNOWN'
+        : voidable || voided
+          ? 'VOID'
+          : declared !== null
+            ? 'REFUND'
+            : 'PROCESSED',
       rawStatus: status || message || null,
       /** `null` continua sendo resposta válida: a companhia pode não declarar valor. */
       refund: declared,
+      /**
+       * 🔴 Só o CUPOM prova que um e-ticket foi anulado. O `OrderCancelRS` de
+       * sucesso não diz nada sobre documento, e publicar `true` a partir dele
+       * afirmaria uma anulação que ninguém confirmou.
+       */
+      eticketsCancelled: isVoided(payload),
+      tickets: readTickets(payload),
     };
   }
 
@@ -394,10 +478,9 @@ export class LatamProvider implements FlightProvider {
          *
          * 🔴 O que o sandbox devolve de verdade numa ordem PAGA é o terceiro:
          * `PriceDifferential/GrandTotalAmount`, irmão do `DiffPrice` — que ali
-         * só traz o `Surcharge/Breakdown` (tarifa, taxa de embarque,
-         * opcionais). Procurar só dentro do `DiffPrice`, como a amostra sugere,
-         * fazia o cancelamento parar com "sem valor de reembolso" numa resposta
-         * que trazia o valor.
+         * só traz o `Surcharge/Breakdown`. Procurar só dentro do `DiffPrice`,
+         * como a amostra sugere, fazia o cancelamento parar com "sem valor de
+         * reembolso" numa resposta que trazia o valor.
          */
         const nested = amount(child(differential, 'DiffPrice', 'Price', 'TotalAmount'));
         const flat = nested.value !== null
@@ -407,8 +490,6 @@ export class LatamProvider implements FlightProvider {
           ? flat
           : amount(child(differential, 'GrandTotalAmount'));
 
-        // `roundMoney` devolve `null` para valor não-finito; aqui já sabemos que
-        // é número, então o fallback é o próprio valor, nunca um zero inventado.
         const total = money.value;
         if (total !== null) return { total: roundMoney(total) ?? total, currency: money.currency };
       }
@@ -437,7 +518,7 @@ export class LatamProvider implements FlightProvider {
   }
 
   /** Opcionais da oferta. Mesmo endereçamento do mapa: pelo item, não pelo UUID. */
-  async ancillaries(key: OfferKey, context: RequestContext): Promise<ProviderAncillary[]> {
+  async ancillaries(key: OfferKey, context: RequestContext): Promise<ProviderAncillaryCatalog> {
     const { payload } = await this.commands.serviceList({ offerId: key.i ?? key.r }, key.x ?? [], context);
     return normalizeServiceList(payload);
   }
@@ -445,10 +526,9 @@ export class LatamProvider implements FlightProvider {
   /**
    * Os mesmos catálogos, agora sobre a reserva emitida.
    *
-   * 🔴 Os `offerItemId` que voltam daqui (`SEAT_…`/`BAG_…`) NÃO são os mesmos
-   * do catálogo por oferta (`SEI|…`), e só eles servem para comprar depois da
-   * emissão. Trocar um pelo outro é o que fazia a LATAM responder
-   * `INVALID_OFFER_TYPES`.
+   * 🔴 Os ids que voltam daqui (`SEAT_…`/`BAG_…`) NÃO são os mesmos do catálogo
+   * por oferta (`SEI|…`), e só eles servem para comprar depois da emissão.
+   * Trocar um pelo outro é o que fazia a LATAM responder `INVALID_OFFER_TYPES`.
    */
   async seatMapForOrder(locator: string, context: RequestContext): Promise<ProviderSeatMap> {
     const paxIds = await this.paxIdsOf(locator, context);
@@ -456,7 +536,7 @@ export class LatamProvider implements FlightProvider {
     return normalizeSeatMap(payload);
   }
 
-  async ancillariesForOrder(locator: string, context: RequestContext): Promise<ProviderAncillary[]> {
+  async ancillariesForOrder(locator: string, context: RequestContext): Promise<ProviderAncillaryCatalog> {
     const paxIds = await this.paxIdsOf(locator, context);
     const { payload } = await this.commands.serviceList({ orderId: locator }, paxIds, context);
     return normalizeServiceList(payload);
@@ -487,6 +567,9 @@ export class LatamProvider implements FlightProvider {
 
     const order = child(payload, 'Order') ?? payload;
     const status = (text(child(order, 'StatusCode')) ?? '').toUpperCase();
+    const emdByPax = new Map(
+      readTickets(payload).map((ticket) => [ticket.passengerId ?? '', ticket.ticketNumber]),
+    );
 
     /**
      * Os serviços recém-confirmados vêm espalhados pelos `OrderItem`; o que
@@ -497,23 +580,49 @@ export class LatamProvider implements FlightProvider {
         const seat = child(service, 'OrderServiceAssociation', 'SeatOnLeg', 'Seat');
         const row = text(child(seat, 'RowNumber'));
         const column = text(child(seat, 'ColumnID'));
+        const raw = text(child(service, 'StatusCode'));
+        const paxId = text(child(service, 'PaxRefID'));
+        const emdNumber = paxId ? emdByPax.get(paxId) ?? null : null;
 
         return {
+          offerItemId: text(child(service, 'OfferItemRefID')) ?? null,
           serviceId: text(child(service, 'ServiceID')) ?? null,
           name: text(child(service, 'OrderServiceAssociation', 'ServiceDefinitionRef', 'ServiceDefinitionRefID')) ?? null,
-          paxId: text(child(service, 'PaxRefID')) ?? null,
+          paxId,
           segmentId: text(child(service, 'OrderServiceAssociation', 'ServiceDefinitionRef', 'PaxSegmentRefID')) ?? null,
           seat: row && column ? `${row}${column}` : null,
-          status: text(child(service, 'StatusCode')) ?? null,
+          /**
+           * 🔴 `booked` ≠ `issued`: o serviço confirmado na ordem ainda não tem
+           * EMD. Quem vê `issued` sem número de documento está lendo uma
+           * promessa como se fosse o bilhete.
+           */
+          status: emdNumber
+            ? ('issued' as const)
+            : (raw ?? '').toUpperCase() === 'CONFIRMED'
+              ? ('booked' as const)
+              : raw
+                ? ('failed' as const)
+                : null,
+          providerStatus: raw,
+          emdNumber,
+          message: null,
         };
       }),
     );
 
     const total = num(child(order, 'TotalPrice', 'TotalAmount'));
+    const confirmedStatus = CONFIRMED_STATUSES.has(status) || status === 'OPENED';
 
     return {
       locator,
-      status: CONFIRMED_STATUSES.has(status) || status === 'OPENED' ? 'confirmed' : 'pending',
+      // A companhia respondeu sem erro: aceitou e gravou.
+      committed: true,
+      /**
+       * 🔴 A PROVA é o serviço aparecer na resposta. Status "ok" sem nenhum
+       * serviço de volta não confirma nada — e `null` diz exatamente isso, em
+       * vez de deduzir sucesso do `committed`.
+       */
+      confirmed: services.length > 0 ? confirmedStatus : null,
       rawStatus: status || null,
       services,
       total: total === null
@@ -553,11 +662,7 @@ export class LatamProvider implements FlightProvider {
    * 🔴 A resposta NÃO é NDC: `<InstallmentOptionsRS>` na raiz, sem `<Response>`
    * dentro — por isso o payload é lido direto, sem descer um nível.
    */
-  async financingOptions(
-    locator: string,
-    pan: string,
-    context: RequestContext,
-  ): Promise<ProviderFinancing> {
+  async financingOptions(locator: string, pan: string, context: RequestContext): Promise<ProviderFinancing> {
     const { parsed } = await this.commands.installmentOptions(pan, locator, context);
     const root = (Object.values(parsed)[0] ?? {}) as XmlValue;
 
@@ -598,14 +703,30 @@ export class LatamProvider implements FlightProvider {
 
     const order = child(payload, 'Order') ?? payload;
     const status = (text(child(order, 'StatusCode')) ?? '').toUpperCase();
+    const documents = readTickets(payload);
+
+    // Bilhete de voo e EMD em listas separadas — ciclos de vida diferentes.
+    const tickets = documents.filter((document) => document.type === 'flight');
+    const emds = documents.filter((document) => document.type !== 'flight');
+    const final = CONFIRMED_STATUSES.has(status);
 
     return {
       locator,
-      // Emitido é status FINAL. `OPENED` continua pendente, mesmo com o pagamento aceito.
-      status: CONFIRMED_STATUSES.has(status) ? 'issued' : 'pending',
+      committed: true,
+      /**
+       * 🔴 A prova de emissão é o NÚMERO DO BILHETE, não o status.
+       *
+       * `true` com documento na mão; `false` quando a ordem fechou e nenhum
+       * documento veio — procuramos a prova e ela não estava lá; `null`
+       * enquanto a companhia não fechou, porque aí a prova ainda não existe.
+       */
+      confirmed: tickets.length > 0 ? true : (final ? false : null),
+      queued: !final,
       rawStatus: status || null,
-      // Os bilhetes aparecem na ordem depois da emissão; antes disso, `[]`.
-      tickets: readTickets(payload),
+      authorizationCode: text(child(payload, 'PaymentFunctions', 'PaymentProcessingDetails', 'AuthorizationCode')),
+      tickets,
+      emds,
+      messages: readMessages(payload),
     };
   }
 
@@ -625,6 +746,20 @@ export class LatamProvider implements FlightProvider {
      * seria dizer que a viagem está de pé.
      */
     const voided = isVoided(payload);
+
+    /**
+     * A tarifa da ordem vive no `OrderItem`, não no segmento. Numa tarifa de
+     * PACOTE — que é o caso dos dois provedores — ela cobre a viagem inteira,
+     * então o mesmo par vale para todos os trechos. Publicar por segmento um
+     * dado que a companhia deu por ordem seria inventar granularidade.
+     */
+    const component = asList(child(order, 'OrderItem'))
+      .flatMap((item) => asList(child(item, 'FareDetail')))
+      .flatMap((detail) => asList(child(detail, 'FareComponent')))
+      .find((entry) => entry !== undefined);
+
+    const fareBasis = text(child(component, 'FareBasisCode'));
+    const bookingClass = text(child(component, 'RBD', 'RBD_Code'));
 
     return {
       status: voided
@@ -656,6 +791,7 @@ export class LatamProvider implements FlightProvider {
         ?? text(child(order, 'TimeLimitDateTime')),
       confirmationAt: text(child(order, 'CreateDateTime')),
       people: asList(child(payload, 'DataLists', 'PaxList', 'Pax')).map((pax) => ({
+        id: text(child(pax, 'PaxID')),
         firstName: text(child(pax, 'Individual', 'GivenName')),
         lastName: text(child(pax, 'Individual', 'Surname')),
         email: text(child(pax, 'ContactInfo', 'EmailAddress', 'EmailAddressText')),
@@ -668,8 +804,7 @@ export class LatamProvider implements FlightProvider {
        * 🔴 O `OrderRetrieve` da LATAM devolve o itinerário INTEIRO, e isso
        * estava sendo descartado: o contrato dizia `segments: null` porque foi
        * escrito quando só existia a Travelfusion, cujo `CheckBooking` de fato
-       * não traz trecho nenhum. Aqui os dados existem — voo, horários, duração
-       * e aeronave — e são o que a pessoa quer ver depois de reservar.
+       * não traz trecho nenhum.
        */
       segments: asList(child(payload, 'DataLists', 'PaxSegmentList', 'PaxSegment')).map((segment) => ({
         segmentId: text(child(segment, 'PaxSegmentID')),
@@ -677,17 +812,34 @@ export class LatamProvider implements FlightProvider {
         destination: text(child(segment, 'Arrival', 'IATA_LocationCode')),
         departure: text(child(segment, 'Dep', 'AircraftScheduledDateTime')),
         arrival: text(child(segment, 'Arrival', 'AircraftScheduledDateTime')),
-        duration: text(child(segment, 'Duration')),
+        // 🔴 Convertido AQUI: o contrato publica minutos, não `PT4H5M`. Deixar o
+        // ISO passar obrigava cada tela a escrever o seu próprio parser.
+        duration: durationFromIso(text(child(segment, 'Duration'))) ?? 0,
         company: {
           code: text(child(segment, 'MarketingCarrierInfo', 'CarrierDesigCode')),
           number: text(child(segment, 'MarketingCarrierInfo', 'MarketingCarrierFlightNumberText')),
         },
         cabin: text(child(segment, 'CabinType', 'CabinTypeName')),
-        aircraft: text(
-          child(segment, 'DatedOperatingLeg', 'CarrierAircraftType', 'CarrierAircraftTypeCode'),
-        ),
+        aircraft: text(child(segment, 'DatedOperatingLeg', 'CarrierAircraftType', 'CarrierAircraftTypeCode')),
+        fareBasis,
+        bookingClass,
       })),
+      /**
+       * 🔴 O `PaxJourneyList` diz quais segmentos formam cada perna, e estava
+       * sendo descartado. Sem ele o contrato adivinhava ida e volta pela
+       * CONTAGEM de segmentos — o que transforma uma conexão GRU→GRU→SCL em
+       * "ida e volta" e faz a terceira perna de um multidestino sumir.
+       */
+      journeys: asList(child(payload, 'DataLists', 'PaxJourneyList', 'PaxJourney'))
+        .map((journey) => ({
+          id: text(child(journey, 'PaxJourneyID')) ?? '',
+          segmentIds: asList(child(journey, 'PaxSegmentRefID'))
+            .map((ref) => text(ref))
+            .filter((ref): ref is string => ref !== null),
+        }))
+        .filter((journey) => journey.segmentIds.length > 0),
       total: num(child(order, 'TotalPrice', 'TotalAmount')),
+      tickets: readTickets(payload),
     };
   }
 
@@ -707,6 +859,13 @@ export class LatamProvider implements FlightProvider {
       throw new AppError('BUSINESS_RULE_VIOLATION', { metadata: { operation } });
     }
 
+    const passengers: ProviderPassenger[] = asList(child(payload, 'DataLists', 'PaxList', 'Pax')).map((pax) => ({
+      id: text(child(pax, 'PaxID')) ?? '',
+      type: text(child(pax, 'PTC')),
+      firstName: text(child(pax, 'Individual', 'GivenName')),
+      lastName: text(child(pax, 'Individual', 'Surname')),
+    }));
+
     return {
       // O localizador que o passageiro usa é o PNR, quando a LATAM o devolve.
       locator: text(child(order, 'BookingRef', 'ID')) ?? text(child(order, 'BookingRefID')) ?? orderId,
@@ -714,6 +873,8 @@ export class LatamProvider implements FlightProvider {
       // 🔴 Nunca deduzido de `committed`: só status final de sucesso confirma.
       confirmed: CONFIRMED_STATUSES.has(status),
       status,
+      currency: attr(child(order, 'TotalPrice', 'TotalAmount'), 'CurCode'),
+      passengers,
     };
   }
 }

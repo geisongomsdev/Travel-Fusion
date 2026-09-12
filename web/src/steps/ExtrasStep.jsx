@@ -12,7 +12,8 @@ import { cn, formatMoney } from '@/lib/utils';
  *
  * 🔴 Este catálogo não é o mesmo da tela de revisão. Lá os assentos são da
  * OFERTA e servem para escolher antes de reservar; aqui são da RESERVA, e são
- * os únicos que a companhia aceita vender depois da emissão.
+ * os únicos que a companhia aceita vender depois da emissão. A chave (`key`)
+ * de cada item vem deste catálogo e volta intacta na compra.
  *
  * 🔴 O total cobrado é somado pela API a partir do catálogo da companhia, não
  * por esta tela. O número abaixo é conferência para quem compra.
@@ -33,16 +34,12 @@ export function ExtrasStep({
   const [bags, setBags] = useState([]);
   const [card, setCard] = useState({
     brand: 'VI',
-    holder: 'ANDY PETERSON',
+    holderName: 'ANDY PETERSON',
     number: '4000000000002701',
-    securityCode: '737',
-    expiration: '03/30',
-  });
-  const [payer] = useState({
-    firstName: 'Andy',
-    lastName: 'Peterson',
-    dateOfBirth: '1990-04-21',
-    documentNumber: '52998224725',
+    cvv: '737',
+    expiryDate: '03/2030',
+    holderDocument: '52998224725',
+    holderBirthDate: '1990-04-21',
   });
 
   const money = seatMap?.currency ?? currency ?? 'BRL';
@@ -50,8 +47,8 @@ export function ExtrasStep({
 
   const toggleBag = (item) =>
     setBags((prev) => (
-      prev.some((x) => x.offerItemId === item.offerItemId)
-        ? prev.filter((x) => x.offerItemId !== item.offerItemId)
+      prev.some((x) => x.key === item.key)
+        ? prev.filter((x) => x.key !== item.key)
         : [...prev, item]
     ));
 
@@ -59,9 +56,26 @@ export function ExtrasStep({
 
   const buy = () => {
     const items = [];
-    if (seat) items.push({ offerItemId: seat.offerItemId, paxId: seat.paxId ?? 'ADT_1', row: seat.row, column: seat.column });
-    for (const bag of bags) items.push({ offerItemId: bag.offerItemId, paxId: bag.paxId ?? 'ADT_1' });
-    onBuy({ items, card, payer });
+    if (seat) {
+      items.push({
+        key: seat.key,
+        passengerId: firstPassenger(seatMap),
+        segmentId: firstSegment(seatMap),
+        type: 'seat',
+        row: seat.row,
+        column: seat.column,
+      });
+    }
+    for (const bag of bags) {
+      items.push({
+        key: bag.key,
+        passengerId: bag.passengerId ?? firstPassenger(seatMap),
+        ...(bag.segmentId ? { segmentId: bag.segmentId } : {}),
+        ...(bag.type ? { type: bag.type } : {}),
+      });
+    }
+    // Total zero é assento cortesia: a companhia liquida por BSP, sem cartão.
+    onBuy({ items, creditCard: total > 0 ? card : undefined });
   };
 
   return (
@@ -106,10 +120,10 @@ export function ExtrasStep({
               </p>
               <div className="grid gap-2">
                 {ancillaries.map((item) => {
-                  const selected = bags.some((x) => x.offerItemId === item.offerItemId);
+                  const selected = bags.some((x) => x.key === item.key);
                   return (
                     <button
-                      key={item.offerItemId}
+                      key={item.key}
                       type="button"
                       onClick={() => toggleBag(item)}
                       className={cn(
@@ -141,37 +155,39 @@ export function ExtrasStep({
                 <p className="text-xl font-semibold tabular-nums">{formatMoney(total, money)}</p>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5 sm:col-span-2">
-                  <Label htmlFor="extraCard">Número do cartão</Label>
-                  <Input
-                    id="extraCard"
-                    inputMode="numeric"
-                    autoComplete="off"
-                    value={card.number}
-                    onChange={(event) => setCard((prev) => ({ ...prev, number: event.target.value }))}
-                  />
+              {total > 0 && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label htmlFor="extraCard">Número do cartão</Label>
+                    <Input
+                      id="extraCard"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={card.number}
+                      onChange={(event) => setCard((prev) => ({ ...prev, number: event.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="extraExp">Validade</Label>
+                    <Input
+                      id="extraExp"
+                      placeholder="MM/AAAA"
+                      value={card.expiryDate}
+                      onChange={(event) => setCard((prev) => ({ ...prev, expiryDate: event.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="extraCvv">Código de segurança</Label>
+                    <Input
+                      id="extraCvv"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={card.cvv}
+                      onChange={(event) => setCard((prev) => ({ ...prev, cvv: event.target.value }))}
+                    />
+                  </div>
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="extraExp">Validade</Label>
-                  <Input
-                    id="extraExp"
-                    placeholder="MM/AA"
-                    value={card.expiration}
-                    onChange={(event) => setCard((prev) => ({ ...prev, expiration: event.target.value }))}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="extraCvv">Código de segurança</Label>
-                  <Input
-                    id="extraCvv"
-                    inputMode="numeric"
-                    autoComplete="off"
-                    value={card.securityCode}
-                    onChange={(event) => setCard((prev) => ({ ...prev, securityCode: event.target.value }))}
-                  />
-                </div>
-              </div>
+              )}
 
               <Button size="lg" disabled={running} onClick={buy}>
                 {running ? <Loader2 className="animate-spin" /> : <ShoppingCart />}
@@ -194,6 +210,10 @@ export function ExtrasStep({
   );
 }
 
+/** O catálogo da reserva já diz de quem e de qual trecho ele é. */
+const firstPassenger = (seatMap) => seatMap?.passengers?.[0]?.id ?? 'ADT_1';
+const firstSegment = (seatMap) => seatMap?.segments?.[0]?.segmentId ?? undefined;
+
 function ExtrasResult({ purchase, currency }) {
   return (
     <div className="mx-auto max-w-2xl">
@@ -202,19 +222,28 @@ function ExtrasResult({ purchase, currency }) {
           <div className="flex items-start gap-3">
             <Check className="mt-0.5 size-5 shrink-0 text-emerald-600" strokeWidth={1.5} />
             <div>
-              <p className="font-medium">Extras confirmados</p>
+              <p className="font-medium">
+                {/* 🔴 `confirmed: null` NÃO é sucesso comprovado: a companhia
+                    respondeu "ok" e não devolveu o serviço. */}
+                {purchase.confirmed ? 'Extras confirmados' : 'Extras recebidos'}
+              </p>
               <p className="text-sm text-muted-foreground">
-                Cobramos {formatMoney(purchase.charged?.total, purchase.charged?.currency ?? currency)}.
+                {purchase.confirmed
+                  ? `Cobramos ${formatMoney(purchase.amount?.total, purchase.amount?.currency ?? currency)}.`
+                  : 'A companhia aceitou e ainda não confirmou. Atualize a reserva em instantes.'}
               </p>
             </div>
           </div>
 
-          {purchase.services?.length > 0 && (
+          {purchase.items?.length > 0 && (
             <div className="space-y-2 rounded-lg border px-4 py-3">
-              {purchase.services.map((service, index) => (
-                <p key={service.serviceId ?? index} className="text-sm">
-                  {service.seat ? `Assento ${service.seat}` : humanName(service.name)}
-                </p>
+              {purchase.items.map((item, index) => (
+                <div key={item.key ?? index} className="flex items-baseline justify-between gap-2 text-sm">
+                  <span>{humanName(item.name)}</span>
+                  <span className="text-muted-foreground">
+                    {item.emdNumber ?? (item.status === 'booked' ? 'confirmado' : item.status ?? '—')}
+                  </span>
+                </div>
               ))}
             </div>
           )}
@@ -224,7 +253,7 @@ function ExtrasResult({ purchase, currency }) {
   );
 }
 
-/** `FIRST_ADDITIONAL_BAGGAGE` → `Primeira bagagem adicional`. */
+/** `FIRST_ADDITIONAL_BAGGAGE` → `Primeira bagagem despachada`. */
 function humanName(name) {
   if (!name) return 'Serviço';
   const dictionary = {

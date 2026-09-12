@@ -7,8 +7,8 @@ import { cn } from '@/lib/utils';
 import { formatMoney, formatTime } from '@/lib/utils';
 
 /**
- * A Travelfusion é provedor de PACOTE: num roundtrip as ofertas chegam em
- * `groups[]`, não em pernas soltas. Achatamos aqui só para exibir.
+ * A LATAM é provedor de PACOTE: num roundtrip as ofertas chegam em `groups[]`,
+ * não em pernas soltas. Achatamos aqui só para exibir.
  */
 function flatten(data) {
   return [
@@ -20,20 +20,20 @@ function flatten(data) {
 
 /**
  * 🔴 A LATAM devolve UMA oferta por família tarifária, então o mesmo voo chega
- * repetido — BASIC, LIGHT, FULL, PREMIUM… cada uma com seu identifier. Listar
- * cru vira cinco cartões idênticos com preços diferentes.
+ * repetido — BASIC, LIGHT, FULL, PREMIUM… cada uma com seu `fareId`. Listar cru
+ * vira cinco cartões idênticos com preços diferentes.
  *
  * Agrupamos pelo voo (rota + horários) e mantemos as famílias como escolha
- * dentro do cartão. O identifier continua sendo o da família escolhida — é ele
- * que o /quote exige, e ele nunca é remontado aqui.
+ * dentro do cartão. O que segue para tarifar é o `fareId` da família escolhida
+ * — nunca o `identifier` do trecho, que é só a journey da companhia.
  */
 function groupByFlight(legs) {
   const groups = new Map();
 
   for (const leg of legs) {
     const key = [
-      leg.origin?.code,
-      leg.destination?.code,
+      leg.origin?.iata,
+      leg.destination?.iata,
       leg.time?.departure,
       leg.time?.arrival,
       leg.company?.code,
@@ -58,9 +58,16 @@ const priceOf = (fare) => fare?.price?.total?.total ?? Infinity;
 /** Ordenar/exibir pela família MAIS BARATA, nunca por fares[0]. */
 const cheapestFare = (leg) => [...(leg.fares || [])].sort((a, b) => priceOf(a) - priceOf(b))[0];
 
+/** `260` → `4h20`. A API publica minutos; ninguém lê minutos. */
+function humanDuration(minutes) {
+  if (!minutes) return null;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return hours ? `${hours}h${rest ? String(rest).padStart(2, '0') : ''}` : `${rest}min`;
+}
+
 export function ResultsStep({ data, onSelect }) {
   const flights = groupByFlight(flatten(data));
-  const fareCount = flights.reduce((sum, flight) => sum + flight.options.length, 0);
 
   if (flights.length === 0) {
     return (
@@ -88,6 +95,7 @@ function FlightCard({ flight, onSelect }) {
   const [chosen, setChosen] = useState(0);
   const option = flight.options[chosen];
   const { leg } = flight;
+  const duration = humanDuration(leg.time?.duration);
 
   return (
     <Card className="transition-colors hover:bg-muted/40">
@@ -101,9 +109,10 @@ function FlightCard({ flight, onSelect }) {
               <span>{formatTime(leg.time?.departure)}</span>
               <ArrowRight className="h-3 w-3 text-muted-foreground" />
               <span>{formatTime(leg.time?.arrival)}</span>
+              {duration && <span className="text-xs font-normal text-muted-foreground">{duration}</span>}
             </div>
             <p className="text-xs text-muted-foreground">
-              {leg.origin?.code} → {leg.destination?.code} · {leg.company?.name || leg.company?.code || '—'}
+              {leg.origin?.iata} → {leg.destination?.iata} · {leg.company?.name || leg.company?.code || '—'}
             </p>
           </div>
           <Badge variant={leg.stops === 0 ? 'success' : 'secondary'}>

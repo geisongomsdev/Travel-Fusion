@@ -4,8 +4,8 @@ import { roundMoney } from '../../../common/utils/money';
 import { ageOnFlightDate } from '../../../common/utils/age';
 import { OfferKey } from '../../../common/utils/offer-key';
 import { env, PROVIDER } from '../../../config/env';
-import { AvailabilityDto } from '../../flight/dto/availability.dto';
-import { BookingPassengerDto, CreateBookingDto, FareRulesDto, QuoteDto } from '../../flight/dto/booking.dto';
+import { AvailabilityDto, legsOf, passengersOf } from '../../flight/dto/availability.dto';
+import { BookingPersonDto, CreateBookingDto, FareRulesDto, QuoteDto } from '../../flight/dto/booking.dto';
 import {
   FareRuleSection, FlightProvider, ProviderBooking, ProviderOffer, ProviderProbe, ProviderQuote,
   ProviderRetrieval, RequestContext,
@@ -15,10 +15,17 @@ import { hasReturnLeg, normalizeLeg } from './normalizers/routing.normalizer';
 import { sleep, TravelfusionCommands } from './travelfusion.commands';
 import { asList, num, text } from '../../../common/xml/xml.util';
 
+/**
+ * ⚠️ Provedor ARQUIVADO. A Travelfusion está bloqueada por liberação de IP e
+ * fora do escopo atual. Este arquivo acompanha o vocabulário canônico para
+ * continuar compilando e correto, mas não recebe trabalho novo — o foco é a
+ * LATAM. Ver `docs/travelfusion/README.md`.
+ */
+
 const BOOKING_POLL_INTERVAL_MS = 5000;
 const BOOKING_TIMEOUT_MS = 3 * 60 * 1000;
 
-/** Estado de VENDA da reserva — vocabulario canonico, nao o do fornecedor. */
+/** Estado de VENDA da reserva — vocabulário canônico, não o do fornecedor. */
 const TF_STATUS_MAP: Record<string, 'confirmed' | 'pending' | 'cancelled'> = {
   Succeeded: 'confirmed',
   BookingInProgress: 'pending',
@@ -28,14 +35,6 @@ const TF_STATUS_MAP: Record<string, 'confirmed' | 'pending' | 'cancelled'> = {
   Failed: 'cancelled',
 };
 
-/**
- * A Travelfusion vestida com a interface de provedor.
- *
- * Não há lógica nova aqui: os comandos e normalizadores continuam sendo os
- * mesmos. O que este arquivo faz é traduzir o formato de entrega — polling
- * incremental — para o generator que o caso de uso consome, igual para os dois
- * provedores.
- */
 @Injectable()
 export class TravelfusionProvider implements FlightProvider {
   readonly name = PROVIDER;
@@ -53,7 +52,7 @@ export class TravelfusionProvider implements FlightProvider {
     seatMap: false,
     // Os opcionais da Travelfusion saem no /quote, como requiredParameters.
     ancillaries: false,
-    // O StartBooking ja cobra: nao ha o que financiar nem o que emitir depois.
+    // O StartBooking já cobra: não há o que financiar nem o que emitir depois.
     financingOptions: false,
     issue: false,
     sellAncillaries: false,
@@ -74,10 +73,8 @@ export class TravelfusionProvider implements FlightProvider {
    * voo antes da busca terminar.
    */
   async *search(request: AvailabilityDto, context: RequestContext): AsyncGenerator<ProviderOffer[]> {
-    const passengerCount = Math.max(
-      1,
-      request.passengers.adults + (request.passengers.children ?? 0) + (request.passengers.babies ?? 0),
-    );
+    const passengers = passengersOf(request);
+    const passengerCount = Math.max(1, passengers.adults + passengers.children + passengers.infants);
 
     const { routingId } = await this.commands.startRouting(this.buildRoutingRequest(request), context);
     if (!routingId) {
@@ -115,9 +112,12 @@ export class TravelfusionProvider implements FlightProvider {
     }
 
     return {
+      available: true,
+      familyCode: text(response?.FareFamilyCode),
+      family: text(response?.FareFamily),
       price: {
         base: roundMoney(num(response?.BaseFare) ?? 0),
-        taxes: { boarding: roundMoney(num(response?.Tax) ?? 0), service: 0, fuel: 0, baggage: 0 },
+        taxes: roundMoney(num(response?.Tax) ?? 0),
         fees: roundMoney(num(response?.Fee) ?? 0),
         total: roundMoney(total),
         currency: text(response?.Currency) ?? 'BRL',
@@ -137,8 +137,9 @@ export class TravelfusionProvider implements FlightProvider {
   }
 
   async book(key: OfferKey, dto: CreateBookingDto, context: RequestContext): Promise<ProviderBooking> {
-    const referenceDate = dto.referenceDate ?? new Date().toISOString();
-    const bookingParameters = this.toCustomParameters(dto.customParameters);
+    const referenceDate = dto.fields.referenceDate ?? new Date().toISOString();
+    const bookingParameters = this.toCustomParameters(dto.fields.customParameters);
+    const people = Object.entries(dto.people);
 
     await this.commands.processTerms(
       {
@@ -149,7 +150,7 @@ export class TravelfusionProvider implements FlightProvider {
             ? { CustomSupplierParameter: bookingParameters }
             : undefined,
           TravellerList: {
-            Traveller: dto.passengers.map((passenger) => this.buildTraveller(passenger, referenceDate)),
+            Traveller: people.map(([, person]) => this.buildTraveller(person, referenceDate)),
           },
         },
       },
@@ -178,12 +179,20 @@ export class TravelfusionProvider implements FlightProvider {
       committed: true,
       confirmed: last.succeeded,
       status: last.status ?? 'BookingInProgress',
+      // O CheckBooking não declara moeda na confirmação.
+      currency: null,
+      passengers: people.map(([id, person]) => ({
+        id,
+        type: person.ageGroup,
+        firstName: person.firstName,
+        lastName: person.lastName,
+      })),
     };
   }
 
   /**
-   * A Travelfusion nao tem um GetBooking rico: o CheckBooking e o que existe.
-   * As chaves que ela nao informa saem `null` — nunca omitidas.
+   * A Travelfusion não tem um GetBooking rico: o CheckBooking é o que existe.
+   * As chaves que ela não informa saem `null` — nunca omitidas.
    */
   async retrieve(locator: string, context: RequestContext): Promise<ProviderRetrieval> {
     const poll = await this.commands.checkBooking(locator, context);
@@ -199,7 +208,7 @@ export class TravelfusionProvider implements FlightProvider {
       rawStatus: poll.status,
       locator,
       supplierConfirmation: poll.supplierReference,
-      // ⚠️ E o nome da COMPANHIA AEREA, nao o do provedor.
+      // ⚠️ É o nome da COMPANHIA AÉREA, não o do provedor.
       supplierName: text(raw.SupplierName),
       currency: text(raw.Currency),
       createdAt: text(raw.BookingDateTime),
@@ -215,10 +224,14 @@ export class TravelfusionProvider implements FlightProvider {
         dateOfBirth: text(traveller?.DateOfBirth),
         type: text(traveller?.Type),
       })),
-      // 🔴 O CheckBooking NAO devolve itinerario. `[]` aqui e limite do
-      // provedor, nao lacuna nossa — e o contrato distingue as duas coisas.
+      // 🔴 O CheckBooking NÃO devolve itinerário. `[]` aqui é limite do
+      // provedor, não lacuna nossa — e o contrato distingue as duas coisas.
       segments: [],
+      // Sem segmento não há journey para agrupar.
+      journeys: [],
       total: null,
+      // Idem: o agregador não expõe documento nesta leitura.
+      tickets: [],
     };
   }
 
@@ -256,7 +269,9 @@ export class TravelfusionProvider implements FlightProvider {
   }
 
   private buildRoutingRequest(request: AvailabilityDto): Record<string, unknown> {
-    const [outward, inbound] = request.legs;
+    const [outward, inbound] = legsOf(request);
+    const passengers = passengersOf(request);
+
     return {
       Mode: 'plane',
       OriginList: { Origin: outward.origin },
@@ -264,9 +279,9 @@ export class TravelfusionProvider implements FlightProvider {
       OutwardDates: { DepartureDate: outward.date },
       ReturnDates: inbound ? { DepartureDate: inbound.date } : undefined,
       Passengers: {
-        Adults: request.passengers.adults,
-        Children: request.passengers.children ?? 0,
-        Infants: request.passengers.babies ?? 0,
+        Adults: passengers.adults,
+        Children: passengers.children,
+        Infants: passengers.infants,
       },
     };
   }
@@ -275,14 +290,14 @@ export class TravelfusionProvider implements FlightProvider {
     return Object.entries(source ?? {}).map(([Name, Value]) => ({ Name, Value }));
   }
 
-  private buildTraveller(passenger: BookingPassengerDto, referenceDate: string): Record<string, unknown> {
-    const perPassenger = this.toCustomParameters(passenger.customParameters);
+  private buildTraveller(person: BookingPersonDto, referenceDate: string): Record<string, unknown> {
+    const perPassenger = this.toCustomParameters(person.customParameters);
 
     return {
-      Age: ageOnFlightDate(passenger.dateOfBirth, referenceDate),
+      Age: ageOnFlightDate(person.birthDate, referenceDate),
       Name: {
-        Title: passenger.title ?? 'Mr',
-        NamePartList: { NamePart: [passenger.firstName, passenger.lastName].filter(Boolean) },
+        Title: person.title ?? 'Mr',
+        NamePartList: { NamePart: [person.firstName, person.lastName].filter(Boolean) },
       },
       CustomSupplierParameterList: perPassenger.length
         ? { CustomSupplierParameter: perPassenger }

@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { cn, formatMoney, formatTime } from '@/lib/utils';
 
 /**
- * Tarifar = OfferPrice na LATAM, ProcessDetails na Travelfusion.
+ * Tarifar = `OfferPrice` na LATAM.
  *
  * 🔴 Esta tela é de QUEM COMPRA. O nome da mensagem do provedor, a URL do
  * endpoint e os avisos de idempotência não entram: são verdade da integração,
@@ -27,7 +27,7 @@ export function QuoteStep({
   };
 
   if (!quote) return null;
-  const { price, requiredParameters = [] } = quote;
+  const { requiredParameters = [] } = quote;
 
   // Só os que têm opção de escolha viram tela; os de texto livre são coletados
   // no passo seguinte, junto com o passageiro.
@@ -37,16 +37,16 @@ export function QuoteStep({
   /**
    * 🔴 O total é SOMADO aqui, não lido do `/quote`.
    *
-   * O `price.total` que a companhia devolve é o da TARIFA — assento e bagagem
-   * são ofertas à-la-carte, com preço próprio, e não entram nele. Mostrar o
-   * preço de cada extra na tela e deixar o total parado é a tela mentindo: o
-   * número que a pessoa lê tem que ser o que ela vai pagar.
+   * O `total` que a companhia devolve é o da TARIFA — assento e bagagem são
+   * ofertas à-la-carte, com preço próprio, e não entram nele. Mostrar o preço de
+   * cada extra na tela e deixar o total parado é a tela mentindo: o número que a
+   * pessoa lê tem que ser o que ela vai pagar.
    *
    * A moeda vem do preço da tarifa e não é misturada — se um extra vier em
-   * outra moeda, somar seria pior do que não somar, e por isso ele fica de
-   * fora da conta em vez de virar um número errado.
+   * outra moeda, somar seria pior do que não somar, e por isso ele fica de fora
+   * da conta em vez de virar um número errado.
    */
-  const currency = price?.currency ?? null;
+  const currency = quote.currency ?? null;
   const sameCurrency = (money) => money && (money.currency === null || money.currency === currency);
 
   const extrasTotal = [
@@ -56,7 +56,7 @@ export function QuoteStep({
     .filter(sameCurrency)
     .reduce((sum, money) => sum + (money.total ?? 0), 0);
 
-  const total = (price?.total ?? 0) + extrasTotal;
+  const total = (quote.total ?? 0) + extrasTotal;
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
@@ -78,9 +78,9 @@ export function QuoteStep({
                   <span>{formatTime(leg?.time?.arrival)}</span>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  {leg?.origin?.code} → {leg?.destination?.code}
+                  {leg?.origin?.iata} → {leg?.destination?.iata}
                   {leg?.company?.name || leg?.company?.code ? ` · ${leg.company.name ?? leg.company.code}` : ''}
-                  {selection?.fare?.family ? ` · ${selection.fare.family}` : ''}
+                  {quote.family ? ` · ${quote.family}` : ''}
                 </p>
               </div>
             </div>
@@ -121,12 +121,12 @@ export function QuoteStep({
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Opcionais da LATAM: catálogo próprio, vindo do /ancillaries. */}
+              {/* Opcionais da companhia: catálogo próprio, vindo do /ancillaries. */}
               {ancillaries.map((item) => {
-                const chosen = extras.some((x) => x.offerItemId === item.offerItemId);
+                const chosen = extras.some((x) => x.key === item.key);
                 return (
                   <button
-                    key={item.offerItemId}
+                    key={item.key}
                     type="button"
                     onClick={() => onToggleExtra(item)}
                     className={cn(
@@ -190,9 +190,8 @@ export function QuoteStep({
           <CardDescription>Preço confirmado pela companhia agora.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Row label="Tarifa" value={formatMoney(price?.base, price?.currency)} />
-          <Row label="Taxas e impostos" value={formatMoney(price?.taxes?.boarding, price?.currency)} />
-          {price?.fees > 0 && <Row label="Taxa de serviço" value={formatMoney(price.fees, price.currency)} />}
+          <Row label="Tarifa" value={formatMoney(quote.base, currency)} />
+          <Row label="Taxas e impostos" value={formatMoney(quote.taxes, currency)} />
 
           {/* Cada opcional escolhido vira uma LINHA, não um número embutido:
               quem está comprando precisa ver de onde veio o acréscimo. */}
@@ -201,7 +200,7 @@ export function QuoteStep({
           )}
           {extras.map((item) => (
             <Row
-              key={item.offerItemId}
+              key={item.key}
               label={labelForAncillary(item)}
               value={item.price ? formatMoney(item.price.total, item.price.currency) : '—'}
             />

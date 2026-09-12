@@ -1,11 +1,13 @@
 import { encodeOfferKey } from '../../../../common/utils/offer-key';
 import { roundMoney } from '../../../../common/utils/money';
+import { flightDuration } from '../../../../common/utils/duration';
 import { LATAM } from '../../../../config/env';
 import {
   asList, attr, child, num, text, XmlElement, XmlValue,
 } from '../../../../common/xml/xml.util';
 import {
-  Airport, Baggage, Cabin, Fare, FarePrice, FareRulesInfo, Leg, PassengerPrice, Segment,
+  Airport, Baggage, BaggageAllowance, Cabin, Equipment, Fare, FarePrice, FareRulesInfo, Leg,
+  PassengerPrice, Segment,
 } from '../../../flight/flight.types';
 import { ProviderOffer } from '../../provider.types';
 
@@ -33,8 +35,14 @@ export function canonicalCabin(code: string | null, name: string | null): Cabin 
   return null;
 }
 
-const airport = (code: string | null): Airport | null =>
-  code ? { code: code.toUpperCase(), name: null } : null;
+/**
+ * `Airport` do contrato. Cidade e coordenadas são enriquecimento externo: a
+ * LATAM não os manda no AirShopping, e o honesto é `null` em vez de um palpite.
+ */
+const airport = (code: string | null, terminal: string | null = null): Airport | null =>
+  code
+    ? { iata: code.toUpperCase(), city: null, terminal, coordinates: { lat: null, lng: null } }
+    : null;
 
 /**
  * `AircraftScheduledDateTime` vem SEM offset no texto e com o fuso no atributo
@@ -93,16 +101,33 @@ export function indexJourneys(dataLists: XmlValue): Map<string, string[]> {
   return index;
 }
 
+/** `null` quando a companhia não disse o modelo: o código é o que ancora o campo. */
+function equipmentOf(node: XmlValue): Equipment | null {
+  const code = text(child(node, 'DatedOperatingLeg', 'CarrierAircraftType', 'CarrierAircraftTypeCode'));
+  return code ? { code, name: null, description: null } : null;
+}
+
 function normalizeSegment(node: XmlValue, index: number): Segment {
   const marketing = text(child(node, 'MarketingCarrierInfo', 'CarrierDesigCode'));
   const operating = text(child(node, 'OperatingCarrierInfo', 'CarrierDesigCode'));
 
+  const departure = localDateTime(child(node, 'Dep'));
+  const arrival = localDateTime(child(node, 'Arrival'));
+
   return {
-    origin: airport(text(child(node, 'Dep', 'IATA_LocationCode'))),
-    destination: airport(text(child(node, 'Arrival', 'IATA_LocationCode'))),
+    origin: airport(
+      text(child(node, 'Dep', 'IATA_LocationCode')),
+      text(child(node, 'Dep', 'TerminalName')),
+    ),
+    destination: airport(
+      text(child(node, 'Arrival', 'IATA_LocationCode')),
+      text(child(node, 'Arrival', 'TerminalName')),
+    ),
     time: {
-      departure: localDateTime(child(node, 'Dep')),
-      arrival: localDateTime(child(node, 'Arrival')),
+      departure,
+      arrival,
+      // A LATAM declara `Duration` em ISO-8601; ela tem precedência sobre a conta.
+      duration: flightDuration(text(child(node, 'Duration')), departure, arrival),
     },
     company: {
       code: marketing,
@@ -115,11 +140,7 @@ function normalizeSegment(node: XmlValue, index: number): Segment {
     number: text(child(node, 'MarketingCarrierInfo', 'MarketingCarrierFlightNumberText')),
     segment: index,
     connection: index > 0,
-    equipment: {
-      code: text(child(node, 'DatedOperatingLeg', 'CarrierAircraftType', 'CarrierAircraftTypeCode')),
-      name: null,
-      description: null,
-    },
+    equipment: equipmentOf(node),
     cabin: canonicalCabin(
       text(child(node, 'CabinType', 'CabinTypeCode')),
       text(child(node, 'CabinType', 'CabinTypeName')),
@@ -142,7 +163,12 @@ function passengerPrice(fareDetail: XmlValue, fallbackCurrency: string): Passeng
 
   return {
     base: roundMoney(base.value ?? 0),
-    taxes: { boarding: roundMoney(tax.value ?? 0) ?? 0, service: 0, fuel: 0, baggage: 0 },
+    /**
+     * 🔴 A LATAM manda o TOTAL de impostos, não a discriminação. Espalhar esse
+     * número em `boarding` — que foi o que se fez enquanto o campo `total` não
+     * existia — publica como taxa de embarque algo que a companhia nunca separou.
+     */
+    taxes: { boarding: null, service: null, fuel: null, baggage: null, total: roundMoney(tax.value ?? 0) },
     fees: 0,
     total: roundMoney(total.value ?? (base.value ?? 0) + (tax.value ?? 0)),
     currency: base.currency ?? total.currency ?? fallbackCurrency,
@@ -155,32 +181,10 @@ const ptcOf = (fareDetail: XmlValue): string => {
   return first.split('_')[0].toUpperCase();
 };
 
-/**
- * Bagagem do contrato a partir do `BaggageAllowance` da oferta.
- *
- * 🔴 Só `TypeCode=Checked` conta como despachada. `CarryOn` e item pessoal são
- * outra coisa, e somá-los faria uma tarifa LIGHT (sem despacho) parecer que
- * inclui mala.
- */
-function normalizeBaggage(offer: XmlValue, baggageIndex: Map<string, XmlElement>): Baggage {
-  const refs = asList(child(offer, 'BaggageAllowance'))
-    .map((entry) => text(child(entry, 'BaggageAllowanceRefID')))
-    .filter((id): id is string => id !== null);
-
-  const checked = refs
-    .map((id) => baggageIndex.get(id))
-    .filter((bag): bag is XmlElement => bag !== undefined && text(child(bag, 'TypeCode')) === 'Checked');
-
-  if (checked.length === 0) {
-    // Ausência de nó `Checked` numa resposta que TRAZ bagagem de mão é sinal
-    // real de "não inclui", não de desconhecido.
-    return { included: refs.length > 0 ? false : null, quantity: null, weight: null, unit: null };
-  }
-
-  const [first] = checked;
-
+/** Um nó de franquia a partir do `BaggageAllowance` da LATAM. */
+function allowanceOf(node: XmlElement, type: string | null): BaggageAllowance {
   // A LATAM repete WeightAllowance em KG e POUNDS. KG é o que o contrato publica.
-  const measures = asList(child(first, 'WeightAllowance'))
+  const measures = asList(child(node, 'WeightAllowance'))
     .map((entry) => child(entry, 'MaximumWeightMeasure'))
     .filter((measure): measure is XmlValue => measure !== undefined);
 
@@ -189,9 +193,48 @@ function normalizeBaggage(offer: XmlValue, baggageIndex: Map<string, XmlElement>
 
   return {
     included: true,
-    quantity: num(child(first, 'PieceAllowance', 'TotalQty')) ?? checked.length,
+    pieces: num(child(node, 'PieceAllowance', 'TotalQty')) ?? 1,
     weight: num(measured),
     unit: measured ? attr(measured, 'UnitCode') : null,
+    description: text(child(node, 'Desc', 'DescText')),
+    ...(type ? { type } : {}),
+  };
+}
+
+/**
+ * Bagagem do contrato: DOIS nós, cada um com o seu `included`.
+ *
+ * 🔴 `hand` e `hold` são franquias diferentes e não se somam. Uma tarifa LIGHT
+ * inclui bagagem de mão e não inclui despacho — foi por isso que o booleano
+ * único de antes fazia uma LIGHT parecer que levava mala.
+ *
+ * `null` num dos nós é "a companhia não falou disso"; `included: false` é "ela
+ * disse que não tem". A resposta que traz franquia de mão e nenhum nó `Checked`
+ * está afirmando o segundo caso, não o primeiro.
+ */
+function normalizeBaggage(offer: XmlValue, baggageIndex: Map<string, XmlElement>): Baggage {
+  const refs = asList(child(offer, 'BaggageAllowance'))
+    .map((entry) => text(child(entry, 'BaggageAllowanceRefID')))
+    .filter((id): id is string => id !== null);
+
+  const allowances = refs
+    .map((id) => baggageIndex.get(id))
+    .filter((bag): bag is XmlElement => bag !== undefined);
+
+  const byType = (wanted: string) =>
+    allowances.find((bag) => (text(child(bag, 'TypeCode')) ?? '').toLowerCase() === wanted.toLowerCase());
+
+  const checked = byType('Checked');
+  const carryOn = byType('CarryOn');
+
+  const absent = (type: string | null): BaggageAllowance | null =>
+    allowances.length > 0
+      ? { included: false, pieces: 0, weight: 0, unit: null, description: null, ...(type ? { type } : {}) }
+      : null;
+
+  return {
+    hand: carryOn ? allowanceOf(carryOn, null) : absent(null),
+    hold: checked ? allowanceOf(checked, 'checked') : absent('checked'),
   };
 }
 
@@ -232,6 +275,8 @@ function normalizeFare(
   passengerCount: number,
   offerId: string,
   journeyId: string | null,
+  paxIds: string[],
+  direction: 'outward' | 'return',
   priceClasses: Map<string, XmlElement>,
   baggageIndex: Map<string, XmlElement>,
 ): Fare {
@@ -268,19 +313,29 @@ function normalizeFare(
     baby: hasBreakdown ? byPtc('INF') : null,
     total: {
       base: roundMoney(base.value ?? 0),
-      taxes: { boarding: roundMoney(tax.value ?? 0) ?? 0, service: 0, fuel: 0, baggage: 0 },
+      taxes: { boarding: null, service: null, fuel: null, baggage: null, total: roundMoney(tax.value ?? 0) },
       fees: 0,
       total: roundMoney(total.value ?? 0),
       currency,
     },
     perPassenger: roundMoney((total.value ?? 0) / Math.max(1, passengerCount)),
     net: null,
-    exchange: null,
   };
 
+  const offerItemId = text(child(offerItems[0], 'OfferItemID'));
+
   return {
-    // Diferente da Travelfusion, a LATAM identifica o item tarifário.
-    fareId: text(child(offerItems[0], 'OfferItemID')),
+    /**
+     * 🔴 A chave de VENDA mora aqui, não no trecho.
+     *
+     * `i` carrega o OfferItemID porque o OfferPrice exige OfferRefID +
+     * OfferItemRefID; `x`, os PaxIDs, porque a mesma PaxList tem que voltar. Um
+     * voo tem várias famílias e cada uma é uma venda diferente — por isso a
+     * chave é da tarifa, e o trecho publica só a journey.
+     */
+    fareId: encodeOfferKey({
+      p: LATAM, r: offerId, o: journeyId, i: offerItemId, d: direction, x: paxIds,
+    }),
     code: text(child(priceClass, 'Code')) ?? familyText,
     familyCode: text(child(priceClass, 'Code')),
     family: text(child(priceClass, 'Name')) ?? familyText,
@@ -292,34 +347,37 @@ function normalizeFare(
     fees: [],
     baggage: normalizeBaggage(offer, baggageIndex),
     rules: buildFareRules(offer, offerId, journeyId),
-    benefits: {
-      seatSelection: null, checkedBaggage: null, carryOn: null, meal: null,
-      loyaltyPoints: null, priorityBoarding: null, refund: null, change: null,
-    },
+    // A LATAM não descreve comodidade no AirShopping. `null` = não informado.
+    benefits: null,
   };
 }
 
-function buildLeg(
-  segments: Segment[],
-  fare: Fare,
-  offerId: string,
-  journeyId: string | null,
-  offerItemId: string | null,
-  paxIds: string[],
-  direction: 'outward' | 'return',
-): Leg {
+function buildLeg(segments: Segment[], fare: Fare, journeyId: string | null): Leg {
   const first = segments[0];
   const last = segments[segments.length - 1];
   const sameCabin = segments.every((segment) => segment.cabin === first?.cabin);
 
+  const departure = first?.time.departure ?? null;
+  const arrival = last?.time.arrival ?? null;
+
   return {
-    // `i` carrega o OfferItemID: o OfferPrice exige OfferRefID + OfferItemRefID,
-    // e sem ele a chave não conseguiria tarifar a própria oferta que representa.
-    identifier: encodeOfferKey({ p: LATAM, r: offerId, o: journeyId, i: offerItemId, d: direction, x: paxIds }),
+    // A journey da companhia. A chave de venda está em `fares[].fareId`.
+    identifier: journeyId,
     company: { code: first?.company.code ?? null, name: first?.company.name ?? null },
     origin: first?.origin ?? null,
     destination: last?.destination ?? null,
-    time: { departure: first?.time.departure ?? null, arrival: last?.time.arrival ?? null },
+    time: {
+      departure,
+      arrival,
+      /**
+       * A duração do TRECHO é a soma dos segmentos quando todos a declaram —
+       * incluindo a conexão, que é tempo de viagem. Só cai para a diferença
+       * entre as pontas quando algum segmento não informou.
+       */
+      duration: segments.every((segment) => segment.time.duration > 0)
+        ? segments.reduce((sum, segment) => sum + segment.time.duration, 0)
+        : flightDuration(null, departure, arrival),
+    },
     stops: segments.length > 0 ? segments.length - 1 : null,
     flights: segments,
     // A cabine do trecho é a do primeiro segmento quando todos concordam.
@@ -334,8 +392,8 @@ function buildLeg(
  * 🔴 A LATAM DECLARA a combinabilidade: o `OfferID` cobre o itinerário inteiro e
  * o `Service/ServiceAssociations/PaxJourneyRefID` diz quais bounds ele contém.
  * Exatamente como o `RoutingId` da Travelfusion, isso a classifica como provedor
- * de PACOTE (04-availability-formatos.md §2) — a ordem dos journeys é a ordem
- * dos bounds, e parear por conta própria está proibido.
+ * de PACOTE — a ordem dos journeys é a ordem dos bounds, e parear por conta
+ * própria está proibido.
  */
 export function normalizeOffer(
   offer: XmlValue,
@@ -376,8 +434,10 @@ export function normalizeOffer(
 
     if (segments.length === 0) return null;
 
-    const fare = normalizeFare(offer, passengerCount, offerId, journeyId, priceClasses, baggageIndex);
-    return buildLeg(segments, fare, offerId, journeyId, fare.fareId, paxIds, direction);
+    const fare = normalizeFare(
+      offer, passengerCount, offerId, journeyId, paxIds, direction, priceClasses, baggageIndex,
+    );
+    return buildLeg(segments, fare, journeyId);
   };
 
   const outbound = legFor(journeyIds[0], 'outward');

@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { AppError } from '../../../common/errors/app-error';
 import { ProviderRegistry } from '../../providers/provider.registry';
 import { FlightProvider, ProviderOffer, RequestContext } from '../../providers/provider.types';
-import { AvailabilityDto } from '../dto/availability.dto';
+import { AvailabilityDto, legsOf } from '../dto/availability.dto';
 import { AvailabilityData, Leg, StreamEvent } from '../flight.types';
 
 @Injectable()
@@ -29,6 +29,13 @@ export class AvailabilityService {
     let providers: FlightProvider[];
     try {
       providers = this.registry.resolve(request.options?.provider);
+      /**
+       * 🔴 A coerência entre `type` e o corpo é checada ANTES do primeiro
+       * evento. Deixar para o provedor descobrir faria a busca abrir o stream,
+       * emitir `start` e só então morrer — e quem consome já teria mostrado
+       * "buscando" para um pedido que nunca teve chance.
+       */
+      legsOf(request);
     } catch (error) {
       yield this.fatal(error, context, null, now());
       return;
@@ -221,8 +228,8 @@ export class AvailabilityService {
    */
   private buildData(offers: ProviderOffer[], request: AvailabilityDto): AvailabilityData {
     if (request.type === 'oneway') {
-      // 🔴 Chave AUSENTE ≠ []. Numa ida não existe volta, então a chave não existe.
-      return { departure: offers.map((offer) => offer.outbound), groups: [] };
+      // De acordo com o padrão da empresa, OW publica a chave `return: []` para manter o shape estável.
+      return { departure: offers.map((offer) => offer.outbound), return: [], groups: [] };
     }
 
     if (request.type === 'multicity') {
@@ -243,11 +250,20 @@ export class AvailabilityService {
      */
     const groups = offers
       .filter((offer) => offer.inbound !== null)
-      .map((offer) => ({
-        departure: [offer.outbound],
-        return: [offer.inbound!],
-        fares: offer.outbound.fares,
-      }));
+      .map((offer, index) => {
+        const farePrice = offer.outbound.fares[0]?.price;
+        return {
+          id: index + 1,
+          price: farePrice ? {
+            total: farePrice.total?.total ?? null,
+            perPassenger: farePrice.perPassenger ?? null,
+            currency: farePrice.total?.currency ?? null,
+          } : null,
+          departure: [offer.outbound],
+          return: [offer.inbound!],
+          fares: offer.outbound.fares,
+        };
+      });
 
     return { groups, departure: [], return: [] };
   }
@@ -346,8 +362,8 @@ export class AvailabilityService {
           max = max === null ? total : Math.max(max, total);
         }
 
-        if (cheapest?.rules.refundable === true) refundable += 1;
-        if (cheapest?.rules.refundable === false) nonRefundable += 1;
+        if (cheapest?.rules?.refundable === true) refundable += 1;
+        if (cheapest?.rules?.refundable === false) nonRefundable += 1;
       }
     }
 

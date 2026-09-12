@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, RotateCcw } from 'lucide-react';
+import { RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Steps } from '@/components/ui/steps';
 import { ErrorPanel } from '@/components/ErrorPanel';
@@ -30,6 +30,7 @@ export default function App() {
   const [error, setError] = useState(null);
 
   const [events, setEvents] = useState([]);
+  const [criteria, setCriteria] = useState(null);
   const [offers, setOffers] = useState(null);
   const [selection, setSelection] = useState(null);
   const [quote, setQuote] = useState(null);
@@ -54,9 +55,15 @@ export default function App() {
   const [showExtras, setShowExtras] = useState(false);
   const [voucherOpen, setVoucherOpen] = useState(false);
 
+  /** O endereço da reserva, repetido em toda rota pós-venda. */
+  const locator = booking?.booking?.locator ?? null;
+  const provider = booking?.provider ?? undefined;
+  const address = { booking: { locator }, options: { provider } };
+
   const reset = () => {
     setStep(0);
     setEvents([]);
+    setCriteria(null);
     setOffers(null);
     setSelection(null);
     setQuote(null);
@@ -83,6 +90,8 @@ export default function App() {
     setError(null);
     setEvents([]);
     setOffers(null);
+    // O tipo da viagem volta no /quote: tarifar precisa saber se é ida ou pacote.
+    setCriteria(body);
 
     try {
       // O provedor vem do formulário. Fixá-lo aqui esconderia a fronteira
@@ -108,12 +117,20 @@ export default function App() {
     }
   }
 
+  /**
+   * 🔴 O que segue para tarifar é o `fareId` da TARIFA, não o `identifier` do
+   * trecho. Um voo tem várias famílias e cada uma é uma venda diferente; o
+   * `identifier` é só a journey da companhia, e vai junto como contexto.
+   */
   async function handleSelect(leg, fare) {
     setSelection({ leg, fare });
     setRunning(true);
     setError(null);
     try {
-      const response = await post('/quote', { identifier: leg.identifier });
+      const response = await post('/quote', {
+        type: criteria?.type ?? 'oneway',
+        offers: [{ fareId: fare.fareId, journeyKey: leg.identifier ?? undefined }],
+      });
       setQuote(response.data);
       setStep(2);
 
@@ -121,8 +138,8 @@ export default function App() {
        * Os opcionais são leitura independente e podem falhar sem derrubar a
        * tarifação — por isso ficam fora do try principal.
        */
-      post('/ancillaries', { identifier: leg.identifier })
-        .then((extra) => setAncillaries(extra.data?.ancillaries ?? []))
+      post('/ancillaries', { ancillaries: { fareId: fare.fareId } })
+        .then((extra) => setAncillaries(extra.data?.offers ?? []))
         .catch(() => setAncillaries([]));
     } catch (quoteError) {
       setError(Object.assign(quoteError, { operation: 'quote' }));
@@ -132,15 +149,16 @@ export default function App() {
   }
 
   /**
-   * @param passengers já vêm do formulário com o seu `customParameters`
-   *   (documento), porque isso é dado do passageiro, não da reserva.
-   * @param bookingParameters e-mail e telefone — o contato da reserva.
+   * @param people mapa PaxID → passageiro. A chave não é decorativa: é ela que
+   *   amarra tarifa, assento e bilhete ao passageiro certo, e a oferta foi
+   *   tarifada com uma lista específica.
+   * @param customer o contato da reserva — a LATAM recusa a ordem sem ele.
    */
-  async function handleBook(passengers, bookingParameters = {}) {
+  async function handleBook(people, customer) {
     setRunning(true);
     setError(null);
     try {
-      // Os CSPs escolhidos no /quote (bagagem da Travelfusion) entram aqui.
+      // Os parâmetros que o /quote declarou entram onde ele disse que entram.
       const perPassenger = {};
       const perBooking = {};
       for (const parameter of quote?.requiredParameters || []) {
@@ -150,13 +168,19 @@ export default function App() {
       }
 
       const response = await post('/booking', {
-        identifier: selection.leg.identifier,
-        // O que o formulário mandou vence o CSP genérico: é mais específico.
-        passengers: passengers.map((passenger) => ({
-          ...passenger,
-          customParameters: { ...perPassenger, ...passenger.customParameters },
-        })),
-        customParameters: { ...perBooking, ...bookingParameters },
+        customer,
+        people: Object.fromEntries(
+          Object.entries(people).map(([paxId, person]) => [
+            paxId,
+            // O que o formulário mandou vence o parâmetro genérico: é mais específico.
+            { ...person, customParameters: { ...perPassenger, ...person.customParameters } },
+          ]),
+        ),
+        fields: {
+          selectedFareId: selection.fare.fareId,
+          referenceDate: criteria?.arrival?.date ?? criteria?.departure?.date,
+          customParameters: perBooking,
+        },
       });
       setBooking(response.data);
     } catch (bookingError) {
@@ -175,7 +199,7 @@ export default function App() {
     setLoadingSeats(true);
     setError(null);
     try {
-      const response = await post('/seat-map', { identifier: selection.leg.identifier });
+      const response = await post('/seat-map', { fareId: selection.fare.fareId });
       setSeatMap(response.data);
     } catch (seatError) {
       setError(Object.assign(seatError, { operation: 'seatMap' }));
@@ -185,22 +209,19 @@ export default function App() {
   }
 
   /**
-   * Pós-venda. As duas rotas existem no contrato e funcionavam sem ter como
-   * serem chamadas daqui — o fluxo terminava no localizador.
-   *
    * 🔴 O `/retrieve` é a leitura INDEPENDENTE: ele não lê o que guardamos, ele
    * pergunta à companhia. É o que prova o efeito da reserva e do cancelamento,
    * e por isso a resposta dele substitui o estado local em vez de acumular.
    */
-  async function handleRetrieve(locator) {
+  async function handleRetrieve(target = locator) {
     setRunning(true);
     setError(null);
     try {
       const response = await post('/retrieve', {
-        booking: { locator },
-        options: { provider: booking?.provider },
+        booking: { locator: target },
+        options: { provider },
       });
-      setRetrieved(response.data ?? response);
+      setRetrieved(response.data);
     } catch (retrieveError) {
       setError(Object.assign(retrieveError, { operation: 'retrieve' }));
     } finally {
@@ -212,24 +233,18 @@ export default function App() {
    * 🔴 Mutação não idempotente, e sem retry. Se a resposta se perder, o caminho
    * é o `/retrieve` — nunca cancelar de novo, porque a primeira pode ter valido.
    */
-  async function handleCancel(locator) {
+  async function handleCancel(target = locator) {
     setRunning(true);
     setError(null);
     try {
       const response = await post('/cancel-booking', {
-        booking: { locator },
-        options: { provider: booking?.provider },
+        cancel: { booking: { locator: target } },
+        options: { provider },
       });
-      /**
-       * 🔴 O envelope do /cancel-booking tem um nível A MAIS que o das outras
-       * rotas: `data.data` é onde vivem `cancelled` e `refund`. Lendo só
-       * `data`, a tela recebia `cancelled: undefined` e continuava mostrando a
-       * passagem como ativa — a companhia tinha cancelado e a tela não sabia.
-       */
-      setCancellation(response.data?.data ?? response.data ?? response);
+      setCancellation(response.data);
 
       // Confirma na companhia, em vez de confiar na resposta da mutação.
-      handleRetrieve(locator);
+      handleRetrieve(target);
     } catch (cancelError) {
       setError(Object.assign(cancelError, { operation: 'cancelBooking' }));
     } finally {
@@ -249,9 +264,8 @@ export default function App() {
     setError(null);
     try {
       const response = await post('/financing-options', {
-        booking: { locator: booking.locator },
-        options: { provider: booking.provider },
-        card: pan,
+        ...address,
+        payment: { creditCard: { number: pan } },
       });
       setInstallments(response.data?.options ?? []);
     } catch (installmentError) {
@@ -268,17 +282,16 @@ export default function App() {
    * O valor não é mandado daqui de propósito — a API pergunta à companhia
    * quanto custa antes de cobrar.
    */
-  async function handlePay({ card, payer, billing, installmentId }) {
+  async function handlePay({ creditCard, billing, installmentId }) {
     setRunning(true);
     setError(null);
     try {
       const response = await post('/issue', {
-        booking: { locator: booking.locator },
-        options: { provider: booking.provider },
-        card,
-        payer,
-        billing,
-        ...(installmentId ? { installmentId } : {}),
+        options: { provider },
+        issue: {
+          booking: { locator },
+          payment: { creditCard, billing, ...(installmentId ? { installmentId } : {}) },
+        },
       });
       setIssued(response.data);
       /**
@@ -287,7 +300,7 @@ export default function App() {
        * que repete a própria anotação mostra o que a gente acha, não o que a
        * companhia registrou.
        */
-      handleRetrieve(booking.locator);
+      handleRetrieve();
     } catch (payError) {
       setError(Object.assign(payError, { operation: 'issue' }));
     } finally {
@@ -300,13 +313,12 @@ export default function App() {
     setLoadingExtras(true);
     setError(null);
     try {
-      const body = { booking: { locator: booking.locator }, options: { provider: booking.provider } };
       const [map, extra] = await Promise.all([
-        post('/order-seat-map', body),
-        post('/order-ancillaries', body),
+        post('/order-seat-map', address),
+        post('/order-ancillaries', address),
       ]);
       setOrderSeatMap(map.data);
-      setOrderAncillaries(extra.data?.ancillaries ?? []);
+      setOrderAncillaries(extra.data?.offers ?? []);
     } catch (extrasError) {
       setError(Object.assign(extrasError, { operation: 'seatMap' }));
     } finally {
@@ -315,16 +327,17 @@ export default function App() {
   }
 
   /** 🔴 Também cobra o cartão, e também sem retry. */
-  async function handleBuyExtras({ items, card, payer }) {
+  async function handleBuyExtras({ items, creditCard }) {
     setRunning(true);
     setError(null);
     try {
       const response = await post('/sell-ancillaries', {
-        booking: { locator: booking.locator },
-        options: { provider: booking.provider },
-        items,
-        card,
-        payer,
+        options: { provider },
+        sellAncillaries: {
+          booking: { locator },
+          items,
+          ...(creditCard ? { payment: { creditCard } } : {}),
+        },
       });
       setPurchase(response.data);
     } catch (buyError) {
@@ -341,7 +354,7 @@ export default function App() {
       <header className="h-14 shrink-0 border-b bg-background">
         <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-4 px-6">
           <a href="/" className="flex items-center gap-3">
-            <LatamMark />
+            <PassMark />
             <span className="text-sm font-medium">Pass · Motor de voos</span>
           </a>
           <nav className="flex items-center gap-1">
@@ -373,8 +386,8 @@ export default function App() {
             ancillaries={ancillaries}
             extras={extras}
             onToggleExtra={(item) => setExtras((prev) => (
-              prev.some((x) => x.offerItemId === item.offerItemId)
-                ? prev.filter((x) => x.offerItemId !== item.offerItemId)
+              prev.some((x) => x.key === item.key)
+                ? prev.filter((x) => x.key !== item.key)
                 : [...prev, item]
             ))}
             seatMap={seatMap}
@@ -398,9 +411,9 @@ export default function App() {
         )}
         {step === 4 && (
           <PaymentStep
-            locator={booking?.locator}
-            amount={retrieved?.total ?? quote?.price?.total}
-            currency={retrieved?.currency ?? quote?.price?.currency}
+            locator={locator}
+            amount={retrieved?.total ?? quote?.total}
+            currency={retrieved?.booking?.currency ?? quote?.currency}
             running={running}
             installments={installments}
             loadingInstallments={loadingInstallments}
@@ -409,7 +422,7 @@ export default function App() {
             onPay={handlePay}
             cancellation={cancellation}
             onVoucher={() => setVoucherOpen(true)}
-            onCancel={() => handleCancel(booking.locator)}
+            onCancel={() => handleCancel()}
             onShowExtras={() => {
               setShowExtras(true);
               // Só busca o catálogo quando alguém pede: são duas chamadas à companhia.
@@ -418,8 +431,8 @@ export default function App() {
           >
             {showExtras && (
               <ExtrasStep
-                locator={booking?.locator}
-                currency={retrieved?.currency ?? quote?.price?.currency}
+                locator={locator}
+                currency={retrieved?.booking?.currency ?? quote?.currency}
                 seatMap={orderSeatMap}
                 ancillaries={orderAncillaries}
                 loading={loadingExtras}
@@ -435,10 +448,10 @@ export default function App() {
         <VoucherDialog
           open={voucherOpen}
           onOpenChange={setVoucherOpen}
-          locator={booking?.locator}
+          locator={locator}
           retrieved={retrieved}
           paid={issued?.amount?.total}
-          services={purchase?.services}
+          items={purchase?.items}
         />
 
         {step > 0 && (
@@ -456,7 +469,7 @@ export default function App() {
 }
 
 /** Monograma neutro: na paleta da Pass, cor no chrome é ruído. */
-function LatamMark() {
+function PassMark() {
   return (
     <div className="flex size-7 items-center justify-center rounded-md bg-primary text-[11px] font-semibold text-primary-foreground">
       P
