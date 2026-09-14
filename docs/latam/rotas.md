@@ -565,7 +565,7 @@ cortado para caber em ida e volta: GRU→SCL→LIM→GRU devolve três. Uma ofer
 
 | Campo | Origem no `AirShoppingRS` | Detalhe |
 |---|---|---|
-| `time.departure/arrival` | `Dep`/`Arrival` → `AircraftScheduledDateTime` + atributo `TimeZoneCode` | o fuso vem num atributo separado; sem juntá-lo, um voo das 23h em Lima cai em outro dia |
+| `time.departure/arrival` | `Dep`/`Arrival` → `AircraftScheduledDateTime` + atributo `TimeZoneCode` | o fuso vem num atributo separado; sem juntá-lo, um voo das 23h em Lima cai em outro dia. `-03:00`/`-0300` vira offset, `America/Santiago` é resolvido para o offset da data. 🔴 O sandbox manda `TimeZoneCode="UTC"` com a hora **local** (medido: SCL→LIM dá 110 min entre os carimbos para `Duration` de 230). Nesse caso o carimbo sai **sem offset**, e a duração vem da `Duration` declarada |
 | `time.duration` | `Duration` (ISO-8601) → minutos | a companhia tem precedência sobre a conta pelos carimbos |
 | `company.operating` | `OperatingCarrierInfo`; sem ele, o próprio `MarketingCarrierInfo` | codeshare é informação do segmento |
 | `cabin` | `CabinTypeCode` (Y/M, W/S, C/J, F) ou `CabinTypeName` | código desconhecido vira `null`, nunca um chute |
