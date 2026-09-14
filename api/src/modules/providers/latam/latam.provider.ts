@@ -506,15 +506,20 @@ export class LatamProvider implements FlightProvider {
    * OfferPrice — a companhia devolve o mapa por passageiro.
    */
   async seatMap(key: OfferKey, context: RequestContext): Promise<ProviderSeatMap> {
-    /**
-     * 🔴 Aqui o `OfferID` é o `SEI|…` do ITEM, não o UUID da oferta — a amostra
-     * do portal usa esse formato e o gateway confirma: com o UUID ele responde
-     * `911 Public flight offer not found in cache by id <uuid>`. É a mesma
-     * palavra (`OfferID`) valendo coisas diferentes em duas mensagens.
-     */
     const offerId = key.i ?? key.r;
-    const { payload } = await this.commands.seatAvailability({ offerId }, key.x ?? [], context);
-    return normalizeSeatMap(payload);
+    try {
+      const { payload } = await this.commands.seatAvailability({ offerId }, key.x ?? [], context);
+      return normalizeSeatMap(payload);
+    } catch (error) {
+      if (
+        error instanceof AppError &&
+        error.providerError?.providerCode === '911' &&
+        error.providerError?.providerMessage?.includes('Seat map not found')
+      ) {
+        return { currency: null, paymentRequired: null, passengers: [], segments: [] };
+      }
+      throw error;
+    }
   }
 
   /** Opcionais da oferta. Mesmo endereçamento do mapa: pelo item, não pelo UUID. */
@@ -532,8 +537,19 @@ export class LatamProvider implements FlightProvider {
    */
   async seatMapForOrder(locator: string, context: RequestContext): Promise<ProviderSeatMap> {
     const paxIds = await this.paxIdsOf(locator, context);
-    const { payload } = await this.commands.seatAvailability({ orderId: locator }, paxIds, context);
-    return normalizeSeatMap(payload);
+    try {
+      const { payload } = await this.commands.seatAvailability({ orderId: locator }, paxIds, context);
+      return normalizeSeatMap(payload);
+    } catch (error) {
+      if (
+        error instanceof AppError &&
+        error.providerError?.providerCode === '911' &&
+        error.providerError?.providerMessage?.includes('Seat map not found')
+      ) {
+        return { currency: null, paymentRequired: null, passengers: [], segments: [] };
+      }
+      throw error;
+    }
   }
 
   async ancillariesForOrder(locator: string, context: RequestContext): Promise<ProviderAncillaryCatalog> {

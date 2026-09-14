@@ -262,25 +262,47 @@ export class SellAncillariesService {
       });
     }
 
-    const result = await provider.sellAncillaries(
-      booking.locator,
-      {
-        items: items.map((item) => {
-          // A chave já foi validada contra o catálogo — decodificar não falha aqui.
+    let result;
+    try {
+      result = await provider.sellAncillaries(
+        booking.locator,
+        {
+          items: items.map((item) => {
+            const decoded = decodeServiceKey(item.key)!;
+            return {
+              offerItemId: decoded.o,
+              serviceId: decoded.s ?? null,
+              paxId: item.passengerId,
+              seat: item.row && item.column ? { row: item.row, column: item.column } : null,
+            };
+          }),
+          amount: { total, currency: currency ?? 'BRL' },
+          card: total > 0 && card ? toProviderCard(card) : null,
+          payer: total > 0 && card ? payerOf(card, 'sellAncillaries.payment.creditCard') : null,
+        },
+        context,
+      );
+    } catch (error) {
+      if (error instanceof AppError && error.code === 'PAYMENT_DECLINED') {
+        result = {
+          locator: booking.locator,
+          committed: false,
+          confirmed: false,
+          services: [],
+          rawStatus: 'PAYMENT_DECLINED',
+        };
+        for (const item of items) {
           const decoded = decodeServiceKey(item.key)!;
-          return {
+          result.services.push({
             offerItemId: decoded.o,
-            serviceId: decoded.s ?? null,
-            paxId: item.passengerId,
-            seat: item.row && item.column ? { row: item.row, column: item.column } : null,
-          };
-        }),
-        amount: { total, currency: currency ?? 'BRL' },
-        card: total > 0 && card ? toProviderCard(card) : null,
-        payer: total > 0 && card ? payerOf(card, 'sellAncillaries.payment.creditCard') : null,
-      },
-      context,
-    );
+            status: 'failed',
+            message: error.publicMessage ?? error.providerError?.providerMessage ?? 'Pagamento recusado',
+          });
+        }
+      } else {
+        throw error;
+      }
+    }
 
     // Localizador e correlação — nunca o meio de pagamento.
     this.logger.log({
