@@ -17,6 +17,10 @@ export function SearchStep({ onSearch, running }) {
     destination: 'SCL',
     date: '2026-11-20',
     returnDate: '2026-11-27',
+    segments: [
+      { origin: 'GRU', destination: 'SCL', date: '2026-11-20' },
+      { origin: 'SCL', destination: 'LIM', date: '2026-11-24' },
+    ],
     adults: 1,
     cabin: 'economy',
     provider: 'latam',
@@ -27,6 +31,24 @@ export function SearchStep({ onSearch, running }) {
 
   const submit = (event) => {
     event.preventDefault();
+
+    const passengers = { adults: Number(form.adults) || 1, children: 0, infants: 0 };
+    const options = { provider: [form.provider], class: form.cabin };
+
+    // Multidestino não tem pontas: vai a lista COMPLETA de trechos, e só ela.
+    if (form.type === 'multicity') {
+      onSearch({
+        type: 'multicity',
+        segments: form.segments.map((segment) => ({
+          origin: segment.origin.toUpperCase(),
+          destination: segment.destination.toUpperCase(),
+          date: segment.date,
+        })),
+        passengers,
+        options,
+      });
+      return;
+    }
 
     /**
      * 🔴 A viagem é descrita por PONTAS, não por uma lista de trechos: em ida e
@@ -41,8 +63,8 @@ export function SearchStep({ onSearch, running }) {
         iata: form.destination.toUpperCase(),
         ...(form.type === 'roundtrip' ? { date: form.returnDate } : {}),
       },
-      passengers: { adults: Number(form.adults) || 1, children: 0, infants: 0 },
-      options: { provider: [form.provider], class: form.cabin },
+      passengers,
+      options,
     });
   };
 

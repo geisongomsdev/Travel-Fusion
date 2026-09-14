@@ -496,7 +496,11 @@ depois de já ter dito "buscando".
 |---|---|---|
 | `oneway` | `departure[]` | `{ "departure": [Leg], "return": [], "groups": [] }` |
 | `roundtrip` | `groups[]` | `{ "groups": [{ "id": 1, "price": {…}, "departure": [Leg], "return": [Leg], "fares": [Fare] }], "departure": [], "return": [] }` |
-| `multicity` | `itineraries[]` | `{ "itineraries": [{ "legs": [[Leg], [Leg]], "fares": [Fare] }] }` |
+| `multicity` | `itineraries[]` | `{ "itineraries": [{ "legs": [[Leg], [Leg], [Leg]], "fares": [Fare] }] }` |
+
+🔴 Em `multicity`, `legs` tem **um item por trecho pedido**, na ordem da viagem. Nenhum trecho é
+cortado para caber em ida e volta: GRU→SCL→LIM→GRU devolve três. Uma oferta com trecho ilegível
+é descartada inteira, porque a companhia não vende o pacote pela metade.
 
 **Um `Leg`**:
 
@@ -1489,7 +1493,6 @@ PCI-DSS, ou exige tokenização do cartão antes de chegar aqui.
 
 | Onde | O que falta |
 |---|---|
-| tela de busca | multidestino ficou fora do formulário: a API atende, a barra só descreve um par origem-destino |
 | `international` | sempre `false` — não há tabela IATA → país, e a API não adivinha |
 
 O **Swagger** (`/docs`) está alinhado: os schemas saem dos DTOs e as descrições foram reescritas para

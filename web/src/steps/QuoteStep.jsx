@@ -4,6 +4,7 @@ import { SeatMapDialog } from '@/components/SeatMapDialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { cn, formatMoney, formatTime } from '@/lib/utils';
+import { legLabel } from './ResultsStep';
 
 /**
  * Tarifar = `OfferPrice` na LATAM.
@@ -32,7 +33,7 @@ export function QuoteStep({
   // Só os que têm opção de escolha viram tela; os de texto livre são coletados
   // no passo seguinte, junto com o passageiro.
   const selectable = requiredParameters.filter((parameter) => parameter.options?.length > 0);
-  const leg = selection?.leg;
+  const legs = selection?.legs ?? (selection?.leg ? [selection.leg] : []);
 
   /**
    * 🔴 O total é SOMADO aqui, não lido do `/quote`.
@@ -66,24 +67,30 @@ export function QuoteStep({
             <CardTitle>Seu voo</CardTitle>
             <CardDescription>Confira antes de continuar.</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap items-center gap-4">
-              <div className="flex size-10 items-center justify-center rounded-full bg-muted">
-                <Plane className="size-4 text-muted-foreground" strokeWidth={1.5} />
-              </div>
-              <div>
-                <div className="flex items-center gap-2 font-medium tabular-nums">
-                  <span>{formatTime(leg?.time?.departure)}</span>
-                  <ArrowRight className="size-3 text-muted-foreground" />
-                  <span>{formatTime(leg?.time?.arrival)}</span>
+          <CardContent className="space-y-4">
+            {/* Todos os trechos do pacote: tarifar é da viagem inteira, não do primeiro voo. */}
+            {legs.map((leg, index) => (
+              <div key={index} className="flex flex-wrap items-center gap-4">
+                <div className="flex size-10 items-center justify-center rounded-full bg-muted">
+                  <Plane className="size-4 text-muted-foreground" strokeWidth={1.5} />
                 </div>
-                <p className="text-sm text-muted-foreground">
-                  {leg?.origin?.iata} → {leg?.destination?.iata}
-                  {leg?.company?.name || leg?.company?.code ? ` · ${leg.company.name ?? leg.company.code}` : ''}
-                  {quote.family ? ` · ${quote.family}` : ''}
-                </p>
+                <div>
+                  <div className="flex items-center gap-2 font-medium tabular-nums">
+                    {legLabel(index, legs.length) && (
+                      <span className="text-xs font-normal text-muted-foreground">{legLabel(index, legs.length)}</span>
+                    )}
+                    <span>{formatTime(leg?.time?.departure)}</span>
+                    <ArrowRight className="size-3 text-muted-foreground" />
+                    <span>{formatTime(leg?.time?.arrival)}</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {leg?.origin?.iata} → {leg?.destination?.iata}
+                    {leg?.company?.name || leg?.company?.code ? ` · ${leg.company.name ?? leg.company.code}` : ''}
+                    {quote.family ? ` · ${quote.family}` : ''}
+                  </p>
+                </div>
               </div>
-            </div>
+            ))}
           </CardContent>
         </Card>
 

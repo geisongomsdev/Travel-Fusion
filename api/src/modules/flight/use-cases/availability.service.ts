@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { AppError } from '../../../common/errors/app-error';
 import { ProviderRegistry } from '../../providers/provider.registry';
-import { FlightProvider, ProviderOffer, RequestContext } from '../../providers/provider.types';
+import { FlightProvider, legsOfOffer, ProviderOffer, RequestContext } from '../../providers/provider.types';
 import { AvailabilityDto, legsOf } from '../dto/availability.dto';
 import { AvailabilityData, Leg, StreamEvent } from '../flight.types';
 
@@ -194,10 +194,7 @@ export class AvailabilityService {
     if (!wantRefundable && !wantCabin) return offers;
 
     return offers.filter((offer) => {
-      const fares = [
-        ...offer.outbound.fares,
-        ...(offer.inbound?.fares ?? []),
-      ];
+      const fares = legsOfOffer(offer).flatMap((leg) => leg.fares);
       if (fares.length === 0) return false;
 
       /**
@@ -236,7 +233,8 @@ export class AvailabilityService {
       // O índice externo é o trecho; o interno são opções pelo MESMO preço.
       return {
         itineraries: offers.map((offer) => ({
-          legs: [offer.outbound, offer.inbound].filter((leg): leg is Leg => leg !== null).map((leg) => [leg]),
+          // Todos os trechos: do terceiro em diante, eles só existem em `legs`.
+          legs: legsOfOffer(offer).map((leg) => [leg]),
           fares: offer.outbound.fares,
         })),
       };
