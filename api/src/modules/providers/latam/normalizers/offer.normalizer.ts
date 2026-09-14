@@ -47,19 +47,54 @@ const airport = (code: string | null, terminal: string | null = null): Airport |
     ? { iata: code.toUpperCase(), city: null, terminal, coordinates: { lat: null, lng: null } }
     : null;
 
+/** Offset `±HH:MM` de um fuso IANA naquele horário local, ou `null` se o nome não existir. */
+function offsetOfZone(zone: string, local: string): string | null {
+  const instant = new Date(`${local}Z`);
+  if (Number.isNaN(instant.getTime())) return null;
+  try {
+    const name = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'longOffset' })
+      .formatToParts(instant)
+      .find((part) => part.type === 'timeZoneName')?.value;
+    const match = /^GMT([+-]\d{2}:\d{2})?$/.exec(name ?? '');
+    return match ? (match[1] ?? '+00:00') : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * `AircraftScheduledDateTime` vem SEM offset no texto e com o fuso no atributo
- * `TimeZoneCode`. Juntar os dois é obrigatório: sem o offset, um voo que sai
- * 23:00 em Lima vira outro dia em quem consome.
+ * `TimeZoneCode`. O texto é SEMPRE a hora local do aeroporto — a do bilhete.
+ *
+ *   - `-03:00` / `-0300`: vira o offset do carimbo;
+ *   - `America/Santiago`: resolvido para o offset daquela data;
+ *   - `UTC` (e qualquer outro rótulo): o carimbo sai SEM offset.
+ *
+ * 🔴 O `UTC` do sandbox é rótulo, não fuso. Medido: SCL→LIM chega com
+ * `chegada − partida` = 110 min para uma `Duration` de 230, e LIM→GRU com 420
+ * para 300 — a diferença é exatamente o fuso de cada aeroporto. Colar `Z` ali
+ * deslocaria o voo em horas; colar o texto cru (`…T16:30:00UTC`) produzia um
+ * carimbo que nenhum parser lê, e a tela mostrava `--:--`. Sem offset, a hora
+ * local continua certa, e a duração vem da `Duration` declarada.
  */
 function localDateTime(node: XmlValue): string | null {
   const stamp = child(node, 'AircraftScheduledDateTime');
   const raw = text(stamp);
   if (!raw) return null;
+  if (/(?:[Zz]|[+-]\d{2}:\d{2})$/.test(raw)) return raw;
 
-  const zone = attr(stamp, 'TimeZoneCode');
-  if (!zone || /[Zz]|[+-]\d{2}:\d{2}$/.test(raw)) return raw;
-  return `${raw}${zone}`;
+  const zone = attr(stamp, 'TimeZoneCode')?.trim();
+  if (!zone) return raw;
+
+  const offset = /^([+-]\d{2}):?(\d{2})$/.exec(zone);
+  if (offset) return `${raw}${offset[1]}:${offset[2]}`;
+
+  if (zone.includes('/')) {
+    const resolved = offsetOfZone(zone, raw);
+    return resolved ? `${raw}${resolved}` : raw;
+  }
+
+  return raw;
 }
 
 /** `<Amount CurCode="BRL">123</Amount>` → número + moeda. */

@@ -323,19 +323,19 @@ describeIfSample('AirShopping real da LATAM', () => {
 });
 
 /** Um `PaxSegment` mínimo, com um voo só. */
-const paxSegment = (id: string, from: string, to: string, day: string): string => `
+const paxSegment = (id: string, from: string, to: string, day: string, zone = '-03:00'): string => `
   <PaxSegment>
     <PaxSegmentID>${id}</PaxSegmentID>
     <Dep><IATA_LocationCode>${from}</IATA_LocationCode>
-      <AircraftScheduledDateTime TimeZoneCode="-03:00">${day}T08:00:00</AircraftScheduledDateTime></Dep>
+      <AircraftScheduledDateTime TimeZoneCode="${zone}">${day}T08:00:00</AircraftScheduledDateTime></Dep>
     <Arrival><IATA_LocationCode>${to}</IATA_LocationCode>
-      <AircraftScheduledDateTime TimeZoneCode="-03:00">${day}T11:00:00</AircraftScheduledDateTime></Arrival>
+      <AircraftScheduledDateTime TimeZoneCode="${zone}">${day}T11:00:00</AircraftScheduledDateTime></Arrival>
     <MarketingCarrierInfo><CarrierDesigCode>LA</CarrierDesigCode>
       <MarketingCarrierFlightNumberText>1</MarketingCarrierFlightNumberText></MarketingCarrierInfo>
   </PaxSegment>`;
 
 /** AirShopping de um multidestino GRU → SCL → LIM → GRU: UMA oferta, três journeys. */
-const multicityShopping = (journeys: string[]): string => `
+const multicityShopping = (journeys: string[], zone?: string): string => `
 <IATA_AirShoppingRS><Response>
   <DataLists>
     <PaxJourneyList>
@@ -344,9 +344,9 @@ const multicityShopping = (journeys: string[]): string => `
       <PaxJourney><PaxJourneyID>J3</PaxJourneyID><PaxSegmentRefID>S3</PaxSegmentRefID></PaxJourney>
     </PaxJourneyList>
     <PaxSegmentList>
-      ${paxSegment('S1', 'GRU', 'SCL', '2026-11-20')}
-      ${paxSegment('S2', 'SCL', 'LIM', '2026-11-24')}
-      ${paxSegment('S3', 'LIM', 'GRU', '2026-11-28')}
+      ${paxSegment('S1', 'GRU', 'SCL', '2026-11-20', zone)}
+      ${paxSegment('S2', 'SCL', 'LIM', '2026-11-24', zone)}
+      ${paxSegment('S3', 'LIM', 'GRU', '2026-11-28', zone)}
     </PaxSegmentList>
   </DataLists>
   <OffersGroup><CarrierOffers><Offer>
@@ -383,5 +383,27 @@ describe('multidestino da LATAM', () => {
 
   it('descarta o pacote de 3+ trechos quando um journey não resolve', async () => {
     expect(await normalizeXml(multicityShopping(['J1', 'J2', 'J_INEXISTENTE']))).toEqual([]);
+  });
+});
+
+describe('fuso do horário de voo da LATAM', () => {
+  const departureWith = async (zone: string) => {
+    const [offer] = await normalizeXml(multicityShopping(['J1', 'J2', 'J3'], zone));
+    return offer.outbound.time.departure;
+  };
+
+  it('usa o offset declarado, com ou sem dois-pontos', async () => {
+    expect(await departureWith('-03:00')).toBe('2026-11-20T08:00:00-03:00');
+    expect(await departureWith('-0300')).toBe('2026-11-20T08:00:00-03:00');
+  });
+
+  it('resolve fuso IANA para o offset daquela data', async () => {
+    // Novembro é horário de verão no Chile.
+    expect(await departureWith('America/Santiago')).toBe('2026-11-20T08:00:00-03:00');
+  });
+
+  it('🔴 "UTC" do sandbox é rótulo: sai a hora local, sem offset — nunca `…UTCZ` nem `Z`', async () => {
+    const departure = await departureWith('UTC');
+    expect(departure).toBe('2026-11-20T08:00:00');
   });
 });
