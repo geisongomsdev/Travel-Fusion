@@ -434,13 +434,12 @@ Em ordem de prioridade:
 2. **Autenticação na API e CORS restrito.**
 3. **PCI-DSS ou tokenização** do cartão antes de chegar à API.
 4. **App de produção na LATAM** e identidade de agência real da Pass.
-5. **Multidestino na tela de busca**: a API atende, o formulário só descreve um par origem-destino.
-6. **Compra de opcional** validada num ambiente que autorize a cobrança.
-7. Rotas 501 que a NDC oferece: `remove-seats`, `payment-options`, `retrieve-eticket`,
+5. **Compra de opcional** validada num ambiente que autorize a cobrança.
+6. Rotas 501 que a NDC oferece: `remove-seats`, `payment-options`, `retrieve-eticket`,
    `cancel-eticket`.
-8. **Observabilidade**: métricas por mensagem NDC, taxa de erro por código, latência do
+7. **Observabilidade**: métricas por mensagem NDC, taxa de erro por código, latência do
    `AirShopping`.
-9. Detalhes do contrato: `international` sempre `false`, `trip` inferido pela contagem de segmentos,
+8. Detalhes do contrato: `international` sempre `false`, `trip` inferido pela contagem de segmentos,
    multidestino com uma opção por trecho.
 
 ---

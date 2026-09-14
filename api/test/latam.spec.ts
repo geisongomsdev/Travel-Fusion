@@ -321,3 +321,67 @@ describeIfSample('AirShopping real da LATAM', () => {
     expect(back.o).not.toBe(out.o);
   });
 });
+
+/** Um `PaxSegment` mínimo, com um voo só. */
+const paxSegment = (id: string, from: string, to: string, day: string): string => `
+  <PaxSegment>
+    <PaxSegmentID>${id}</PaxSegmentID>
+    <Dep><IATA_LocationCode>${from}</IATA_LocationCode>
+      <AircraftScheduledDateTime TimeZoneCode="-03:00">${day}T08:00:00</AircraftScheduledDateTime></Dep>
+    <Arrival><IATA_LocationCode>${to}</IATA_LocationCode>
+      <AircraftScheduledDateTime TimeZoneCode="-03:00">${day}T11:00:00</AircraftScheduledDateTime></Arrival>
+    <MarketingCarrierInfo><CarrierDesigCode>LA</CarrierDesigCode>
+      <MarketingCarrierFlightNumberText>1</MarketingCarrierFlightNumberText></MarketingCarrierInfo>
+  </PaxSegment>`;
+
+/** AirShopping de um multidestino GRU → SCL → LIM → GRU: UMA oferta, três journeys. */
+const multicityShopping = (journeys: string[]): string => `
+<IATA_AirShoppingRS><Response>
+  <DataLists>
+    <PaxJourneyList>
+      <PaxJourney><PaxJourneyID>J1</PaxJourneyID><PaxSegmentRefID>S1</PaxSegmentRefID></PaxJourney>
+      <PaxJourney><PaxJourneyID>J2</PaxJourneyID><PaxSegmentRefID>S2</PaxSegmentRefID></PaxJourney>
+      <PaxJourney><PaxJourneyID>J3</PaxJourneyID><PaxSegmentRefID>S3</PaxSegmentRefID></PaxJourney>
+    </PaxJourneyList>
+    <PaxSegmentList>
+      ${paxSegment('S1', 'GRU', 'SCL', '2026-11-20')}
+      ${paxSegment('S2', 'SCL', 'LIM', '2026-11-24')}
+      ${paxSegment('S3', 'LIM', 'GRU', '2026-11-28')}
+    </PaxSegmentList>
+  </DataLists>
+  <OffersGroup><CarrierOffers><Offer>
+    <OfferID>OFFER_MC</OfferID>
+    <OfferItem>
+      <OfferItemID>ITEM_MC</OfferItemID>
+      ${journeys.map((id) => `<Service><PaxRefID>ADT_1</PaxRefID>
+        <ServiceAssociations><PaxJourneyRefID>${id}</PaxJourneyRefID></ServiceAssociations></Service>`).join('')}
+    </OfferItem>
+    <TotalPrice><TotalAmount CurCode="BRL">3000</TotalAmount></TotalPrice>
+  </Offer></CarrierOffers></OffersGroup>
+</Response></IATA_AirShoppingRS>`;
+
+const normalizeXml = async (xml: string) => {
+  const parsed = await parseXml(xml);
+  return normalizeAirShopping((Object.values(parsed)[0] as any).Response, 1, ['ADT_1']);
+};
+
+describe('multidestino da LATAM', () => {
+  it('🔴 publica TODOS os trechos — o terceiro não some por não ser ida nem volta', async () => {
+    const [offer] = await normalizeXml(multicityShopping(['J1', 'J2', 'J3']));
+
+    expect(offer.legs?.map((leg) => `${leg.origin?.iata}-${leg.destination?.iata}`))
+      .toEqual(['GRU-SCL', 'SCL-LIM', 'LIM-GRU']);
+    // outbound/inbound seguem sendo os dois primeiros, para quem já os lia.
+    expect(offer.outbound.destination?.iata).toBe('SCL');
+    expect(offer.inbound?.destination?.iata).toBe('LIM');
+
+    // Mesmo pacote: o trecho do meio não é "volta".
+    const bounds = offer.legs!.map((leg) => decodeOfferKey(leg.fares[0].fareId)!);
+    expect(bounds.map((key) => key.d)).toEqual(['outward', 'segment', 'segment']);
+    expect(new Set(bounds.map((key) => key.r))).toEqual(new Set(['OFFER_MC']));
+  });
+
+  it('descarta o pacote de 3+ trechos quando um journey não resolve', async () => {
+    expect(await normalizeXml(multicityShopping(['J1', 'J2', 'J_INEXISTENTE']))).toEqual([]);
+  });
+});

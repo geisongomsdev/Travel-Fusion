@@ -30,7 +30,17 @@ export interface ProviderOffer {
   outbound: Leg;
   /** `null` numa ida avulsa. Pacote de ida-e-volta SEMPRE traz os dois. */
   inbound: Leg | null;
+  /**
+   * Todos os trechos do pacote, na ordem do itinerário. `outbound`/`inbound`
+   * são só os dois primeiros — num multidestino de três trechos o terceiro
+   * existe apenas aqui. Ausente, a oferta é `[outbound, inbound]`.
+   */
+  legs?: Leg[];
 }
+
+/** Os trechos da oferta, completos — nunca reduzidos a ida e volta. */
+export const legsOfOffer = (offer: ProviderOffer): Leg[] =>
+  offer.legs ?? (offer.inbound ? [offer.outbound, offer.inbound] : [offer.outbound]);
 
 export interface ProviderProbe {
   method: 'auth' | 'catalog';

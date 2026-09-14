@@ -122,8 +122,10 @@ export default function App() {
    * trecho. Um voo tem várias famílias e cada uma é uma venda diferente; o
    * `identifier` é só a journey da companhia, e vai junto como contexto.
    */
-  async function handleSelect(leg, fare) {
-    setSelection({ leg, fare });
+  async function handleSelect(legs, fare) {
+    // A viagem inteira fica na seleção; o primeiro trecho é o contexto da tarifa.
+    const [leg] = legs;
+    setSelection({ legs, leg, fare });
     setRunning(true);
     setError(null);
     try {
@@ -178,7 +180,8 @@ export default function App() {
         ),
         fields: {
           selectedFareId: selection.fare.fareId,
-          referenceDate: criteria?.arrival?.date ?? criteria?.departure?.date,
+          // A última data da viagem: a volta, o último trecho do multidestino ou a ida.
+          referenceDate: criteria?.arrival?.date ?? criteria?.segments?.at(-1)?.date ?? criteria?.departure?.date,
           customParameters: perBooking,
         },
       });

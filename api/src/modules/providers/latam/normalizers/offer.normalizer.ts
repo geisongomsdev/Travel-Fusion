@@ -11,6 +11,9 @@ import {
 } from '../../../flight/flight.types';
 import { ProviderOffer } from '../../provider.types';
 
+/** Posição do trecho no pacote. `segment` é o do meio (ou além) de um multidestino. */
+type Bound = 'outward' | 'return' | 'segment';
+
 /**
  * `CabinTypeCode` da LATAM é o RBD de cabine da IATA, não texto livre.
  * 🔴 Código desconhecido vira `null` — publicar o rótulo cru faria uma busca por
@@ -276,7 +279,7 @@ function normalizeFare(
   offerId: string,
   journeyId: string | null,
   paxIds: string[],
-  direction: 'outward' | 'return',
+  direction: Bound,
   priceClasses: Map<string, XmlElement>,
   baggageIndex: Map<string, XmlElement>,
 ): Fare {
@@ -423,7 +426,7 @@ export function normalizeOffer(
 
   if (journeyIds.length === 0) return null;
 
-  const legFor = (journeyId: string, direction: 'outward' | 'return'): Leg | null => {
+  const legFor = (journeyId: string, direction: Bound): Leg | null => {
     const segmentIds = journeyIndex.get(journeyId);
     if (!segmentIds || segmentIds.length === 0) return null;
 
@@ -440,10 +443,25 @@ export function normalizeOffer(
     return buildLeg(segments, fare, journeyId);
   };
 
-  const outbound = legFor(journeyIds[0], 'outward');
+  /**
+   * 🔴 TODOS os journeys viram trecho, não só os dois primeiros: num
+   * multidestino de três trechos, ler só ida e volta sumia com o terceiro — e a
+   * oferta seria publicada como se a viagem acabasse no segundo.
+   */
+  const boundOf = (index: number): Bound => {
+    if (index === 0) return 'outward';
+    return journeyIds.length === 2 ? 'return' : 'segment';
+  };
+  const legs = journeyIds.map((journeyId, index) => legFor(journeyId, boundOf(index)));
+
+  const [outbound, inbound = null] = legs;
   if (!outbound) return null;
 
-  return { outbound, inbound: journeyIds.length > 1 ? legFor(journeyIds[1], 'return') : null };
+  const complete = legs.filter((leg): leg is Leg => leg !== null);
+  // Pacote de 3+ trechos com um ilegível não é vendável pela metade: sai inteiro.
+  if (journeyIds.length > 2 && complete.length !== journeyIds.length) return null;
+
+  return { outbound, inbound, legs: complete };
 }
 
 /** Todas as ofertas de um `IATA_AirShoppingRS` já normalizadas. */
