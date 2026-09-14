@@ -203,7 +203,14 @@ export default function App() {
     setLoadingSeats(true);
     setError(null);
     try {
-      const response = await post('/seat-map', { fareId: selection.fare.fareId });
+      // 1. Usa o ID do quote se ele existir (pois o quote pode ter 
+      // evoluído a oferta na LATAM). Se não, usa o da seleção.
+      const targetFareId = quote?.fareId || selection.fare.fareId; 
+      
+      // 2. Extrai o identificador do trecho (journeyKey), 
+      // exatamente como você faz no handleSelect.
+      const journeyKey = selection.leg?.identifier;
+      const response = await post('/seat-map', { fareId: targetFareId, journeyKey });
       setSeatMap(response.data);
     } catch (seatError) {
       setError(Object.assign(seatError, { operation: 'seatMap' }));

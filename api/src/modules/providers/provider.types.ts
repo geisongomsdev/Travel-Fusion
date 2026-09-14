@@ -228,7 +228,7 @@ export interface FlightProvider {
    * Mapa de assentos. Opcional, e endereçado pela CHAVE DA OFERTA — na LATAM a
    * escolha acontece antes de reservar, e o localizador ainda não existe.
    */
-  seatMap?(key: OfferKey, context: RequestContext): Promise<ProviderSeatMap>;
+  seatMap?(key: OfferKey, journeyKey?: string, context?: RequestContext): Promise<ProviderSeatMap>;
 
   /** Opcionais vendidos à parte. Endereçado pela oferta, como o mapa. */
   ancillaries?(key: OfferKey, context: RequestContext): Promise<ProviderAncillaryCatalog>;

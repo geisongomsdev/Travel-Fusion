@@ -408,6 +408,12 @@ export class OfferCatalogDto {
   @ApiProperty({ description: 'A chave opaca vinda de `fares[].fareId`.' })
   @IsString()
   fareId!: string;
+
+  // 👇 ADICIONE O JOURNEY KEY AQUI 👇
+  @ApiPropertyOptional({ description: 'O identificador do trecho (necessário na LATAM para mapas pré-reserva).' })
+  @IsOptional()
+  @IsString()
+  journeyKey?: string;
 }
 
 export class AncillariesBlockDto {

@@ -47,7 +47,7 @@ export class SeatMapService {
       throw new AppError('CAPABILITY_NOT_SUPPORTED', { metadata: { operation: 'seatMap' } });
     }
 
-    const map = await provider.seatMap(key, context);
+    const map = await provider.seatMap(key, dto.journeyKey, context);
 
     return {
       provider: provider.name,
