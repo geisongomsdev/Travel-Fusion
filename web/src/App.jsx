@@ -11,6 +11,7 @@ import { PaymentStep } from '@/steps/PaymentStep';
 import { ExtrasStep } from '@/steps/ExtrasStep';
 import { VoucherDialog } from '@/components/VoucherDialog';
 import { post, streamAvailability } from '@/lib/api';
+import logoPass from "/assets/logo-pass.svg";
 
 /**
  * O fluxo até a passagem na mão. Reservar e pagar são passos SEPARADOS porque
@@ -357,8 +358,12 @@ export default function App() {
       <header className="h-14 shrink-0 border-b bg-background">
         <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-4 px-6">
           <a href="/" className="flex items-center gap-3">
-            <PassMark />
-            <span className="text-sm font-medium">Pass · Motor de voos</span>
+         <img 
+            src={logoPass} 
+            alt="Logo PASS" 
+            className="h-3 w-auto"
+          />
+          
           </a>
           <nav className="flex items-center gap-1">
             <Button variant="ghost" size="sm" onClick={reset}>
