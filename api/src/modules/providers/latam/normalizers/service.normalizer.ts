@@ -1,7 +1,6 @@
 import { asList, attr, child, num, text, XmlValue } from '../../../../common/xml/xml.util';
 import { roundMoney } from '../../../../common/utils/money';
 import { encodeServiceKey } from '../../../../common/utils/service-key';
-import { Baggage } from '../../../flight/flight.types';
 import {
   CatalogPassenger, CatalogSegment, ProviderAncillary, ProviderAncillaryCatalog,
 } from '../../provider.types';
@@ -37,25 +36,21 @@ function declaredType(offerItemId: string | null): string | null {
   return null;
 }
 
-/** Franquia estruturada, quando o `ServiceDefinition` a descreve. */
-function baggageOf(definition: XmlValue): Baggage | null {
+/**
+ * Franquia estruturada, quando o `ServiceDefinition` a descreve —
+ * `{pieces, weight, unit}` do 10-ancillaries.md §1.2.
+ *
+ * 🔴 `pieces` é o TOTAL de malas do degrau, não um incremento: "SEGUNDA
+ * BAGAGEM" é `pieces: 2`, e o preço é do conjunto.
+ */
+function baggageOf(definition: XmlValue): ProviderAncillary['baggage'] {
   const pieces = num(child(definition, 'BaggageAllowance', 'PieceAllowance', 'TotalQty'));
   const measure = child(definition, 'BaggageAllowance', 'WeightAllowance', 'MaximumWeightMeasure');
   const weight = num(measure);
 
   if (pieces === null && weight === null) return null;
 
-  return {
-    hand: null,
-    hold: {
-      included: true,
-      pieces,
-      weight,
-      unit: measure ? attr(measure, 'UnitCode') : null,
-      description: text(child(definition, 'Desc', 'DescText')),
-      type: 'checked',
-    },
-  };
+  return { pieces, weight, unit: measure ? attr(measure, 'UnitCode') : null };
 }
 
 function readPassengers(payload: XmlValue): CatalogPassenger[] {

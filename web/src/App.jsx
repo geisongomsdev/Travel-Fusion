@@ -33,6 +33,8 @@ export default function App() {
   const [events, setEvents] = useState([]);
   const [criteria, setCriteria] = useState(null);
   const [offers, setOffers] = useState(null);
+  // Quem respondeu a busca: é a companhia do /quote e do /booking.
+  const [offersProvider, setOffersProvider] = useState(undefined);
   const [selection, setSelection] = useState(null);
   const [quote, setQuote] = useState(null);
   const [parameters, setParameters] = useState({});
@@ -57,15 +59,16 @@ export default function App() {
   const [voucherOpen, setVoucherOpen] = useState(false);
 
   /** O endereço da reserva, repetido em toda rota pós-venda. */
-  const locator = booking?.booking?.locator ?? null;
-  const provider = booking?.provider ?? undefined;
-  const address = { booking: { locator }, options: { provider } };
+  const locator = booking?.locator ?? null;
+  const provider = booking?.provider ?? offersProvider;
+  const options = { provider };
 
   const reset = () => {
     setStep(0);
     setEvents([]);
     setCriteria(null);
     setOffers(null);
+    setOffersProvider(undefined);
     setSelection(null);
     setQuote(null);
     setParameters({});
@@ -100,7 +103,10 @@ export default function App() {
       await streamAvailability(body, (event) => {
         setEvents((prev) => [...prev, event]);
 
-        if (event.type === 'provider_success') setOffers(event.data);
+        if (event.type === 'provider_success') {
+          setOffers(event.data);
+          setOffersProvider(event.provider);
+        }
 
         if (event.type === 'fatal_error') {
           setError({
@@ -130,9 +136,16 @@ export default function App() {
     setRunning(true);
     setError(null);
     try {
+      // 05-quote.md: `provider` na raiz e o pedido dentro do bloco `quote`.
       const response = await post('/quote', {
-        type: criteria?.type ?? 'oneway',
-        offers: [{ fareId: fare.fareId, journeyKey: leg.identifier ?? undefined }],
+        provider: offersProvider,
+        options: {},
+        quote: {
+          type: criteria?.type ?? 'oneway',
+          offers: [{ fareId: fare.fareId, journeyKey: leg.identifier ?? undefined }],
+          // Sem a contagem não há tarifa: a API não assume um adulto.
+          passengers: criteria?.passengers ?? { adults: 1 },
+        },
       });
       setQuote(response.data);
       setStep(2);
@@ -141,7 +154,7 @@ export default function App() {
        * Os opcionais são leitura independente e podem falhar sem derrubar a
        * tarifação — por isso ficam fora do try principal.
        */
-      post('/ancillaries', { ancillaries: { fareId: fare.fareId } })
+      post('/ancillaries', { options: { provider: offersProvider }, ancillaries: { fareId: fare.fareId } })
         .then((extra) => setAncillaries(extra.data?.offers ?? []))
         .catch(() => setAncillaries([]));
     } catch (quoteError) {
@@ -152,9 +165,8 @@ export default function App() {
   }
 
   /**
-   * @param people mapa PaxID → passageiro. A chave não é decorativa: é ela que
-   *   amarra tarifa, assento e bilhete ao passageiro certo, e a oferta foi
-   *   tarifada com uma lista específica.
+   * @param people viajantes, cada um com o `identifier` (PaxID) com que a
+   *   oferta foi tarifada — é ele que amarra tarifa, assento e bilhete.
    * @param customer o contato da reserva — a LATAM recusa a ordem sem ele.
    */
   async function handleBook(people, customer) {
@@ -170,21 +182,32 @@ export default function App() {
         (parameter.perPassenger ? perPassenger : perBooking)[parameter.name] = value;
       }
 
+      /**
+       * 06-booking.md: os trechos e a tarifa vão COPIADOS da busca. A LATAM é
+       * provedor de pacote, então a tarifa vai uma só, na raiz, e sai de dentro
+       * dos trechos — nos dois lugares ao mesmo tempo a API recusa.
+       */
+      const trip = criteria?.type ?? 'oneway';
+      const legs = selection.legs.map(({ fares, ...leg }) => leg);
+      const route = trip === 'multicity'
+        ? { itinerary: { legs } }
+        : { segments: { departure: [legs[0]], return: trip === 'roundtrip' ? legs.slice(1) : [] } };
+
       const response = await post('/booking', {
+        provider,
+        trip,
         customer,
-        people: Object.fromEntries(
-          Object.entries(people).map(([paxId, person]) => [
-            paxId,
-            // O que o formulário mandou vence o parâmetro genérico: é mais específico.
-            { ...person, customParameters: { ...perPassenger, ...person.customParameters } },
-          ]),
-        ),
-        fields: {
-          selectedFareId: selection.fare.fareId,
-          // A última data da viagem: a volta, o último trecho do multidestino ou a ida.
-          referenceDate: criteria?.arrival?.date ?? criteria?.segments?.at(-1)?.date ?? criteria?.departure?.date,
-          customParameters: perBooking,
-        },
+        // O que o formulário mandou vence o parâmetro genérico: é mais específico.
+        people: people.map((person) => ({
+          ...person,
+          customParameters: { ...perPassenger, ...person.customParameters },
+        })),
+        ...route,
+        fares: [{ ...selection.fare, appliesTo: 'all' }],
+        selectedFareId: selection.fare.fareId,
+        // A âncora do gate de re-tarifa: o total que a tela mostrou.
+        displayedTotal: quote?.rawTotal ?? undefined,
+        options: { customParameters: perBooking },
       });
       setBooking(response.data);
     } catch (bookingError) {
@@ -195,22 +218,14 @@ export default function App() {
   }
 
   /**
-   * O mapa de assentos é endereçado pela OFERTA, não pelo localizador: na
-   * LATAM a escolha acontece antes de reservar. Por isso ele vive no passo de
-   * revisão, e não depois da reserva.
+   * O mapa da OFERTA (`seatMap.fareId`, extensão da API): na LATAM a escolha
+   * acontece antes de reservar, então ele vive no passo de revisão.
    */
   async function handleSeatMap() {
     setLoadingSeats(true);
     setError(null);
     try {
-      // 1. Usa o ID do quote se ele existir (pois o quote pode ter 
-      // evoluído a oferta na LATAM). Se não, usa o da seleção.
-      const targetFareId = quote?.fareId || selection.fare.fareId; 
-      
-      // 2. Extrai o identificador do trecho (journeyKey), 
-      // exatamente como você faz no handleSelect.
-      const journeyKey = selection.leg?.identifier;
-      const response = await post('/seat-map', { fareId: targetFareId, journeyKey });
+      const response = await post('/seat-map', { options, seatMap: { fareId: selection.fare.fareId } });
       setSeatMap(response.data);
     } catch (seatError) {
       setError(Object.assign(seatError, { operation: 'seatMap' }));
@@ -275,10 +290,10 @@ export default function App() {
     setError(null);
     try {
       const response = await post('/financing-options', {
-        ...address,
-        payment: { creditCard: { number: pan } },
+        options,
+        financingOptions: { booking: { locator }, payment: { creditCard: { number: pan } } },
       });
-      setInstallments(response.data?.options ?? []);
+      setInstallments(response.data?.plans ?? []);
     } catch (installmentError) {
       setError(Object.assign(installmentError, { operation: 'financingOptions' }));
     } finally {
@@ -293,7 +308,7 @@ export default function App() {
    * O valor não é mandado daqui de propósito — a API pergunta à companhia
    * quanto custa antes de cobrar.
    */
-  async function handlePay({ creditCard, billing, installmentId }) {
+  async function handlePay({ creditCard }) {
     setRunning(true);
     setError(null);
     try {
@@ -301,7 +316,7 @@ export default function App() {
         options: { provider },
         issue: {
           booking: { locator },
-          payment: { creditCard, billing, ...(installmentId ? { installmentId } : {}) },
+          payment: { creditCard },
         },
       });
       setIssued(response.data);
@@ -325,8 +340,8 @@ export default function App() {
     setError(null);
     try {
       const [map, extra] = await Promise.all([
-        post('/order-seat-map', address),
-        post('/order-ancillaries', address),
+        post('/seat-map', { options, seatMap: { booking: { locator } } }),
+        post('/ancillaries', { options, ancillaries: { booking: { locator } } }),
       ]);
       setOrderSeatMap(map.data);
       setOrderAncillaries(extra.data?.offers ?? []);
@@ -427,8 +442,8 @@ export default function App() {
         {step === 4 && (
           <PaymentStep
             locator={locator}
-            amount={retrieved?.total ?? quote?.total}
-            currency={retrieved?.booking?.currency ?? quote?.currency}
+            amount={retrieved?.fields?.pricing?.total ?? quote?.rawTotal}
+            currency={retrieved?.currency ?? quote?.currency}
             running={running}
             installments={installments}
             loadingInstallments={loadingInstallments}
@@ -447,7 +462,7 @@ export default function App() {
             {showExtras && (
               <ExtrasStep
                 locator={locator}
-                currency={retrieved?.booking?.currency ?? quote?.currency}
+                currency={retrieved?.currency ?? quote?.currency}
                 seatMap={orderSeatMap}
                 ancillaries={orderAncillaries}
                 loading={loadingExtras}

@@ -5,9 +5,8 @@ import { durationFromIso } from '../../../common/utils/duration';
 import { OfferKey } from '../../../common/utils/offer-key';
 import { LATAM } from '../../../config/env';
 import { AvailabilityDto, legsOf, passengersOf } from '../../flight/dto/availability.dto';
-import { BookingPersonDto, CreateBookingDto, QuoteDto } from '../../flight/dto/booking.dto';
 import {
-  FareRuleSection, FlightProvider, ProviderAncillaryCatalog, ProviderAncillaryPurchase,
+  BookingInput, FareRuleSection, FlightProvider, ProviderAncillaryCatalog, ProviderAncillaryPurchase,
   ProviderAncillaryPurchaseResult, ProviderBooking, ProviderCancellation, ProviderFinancing,
   ProviderIssue, ProviderOffer, ProviderPassenger, ProviderPayment, ProviderProbe, ProviderQuote,
   ProviderRetrieval, ProviderSeatMap, ProviderTicket, RequestContext,
@@ -125,10 +124,13 @@ function isVoided(payload: XmlValue): boolean {
 }
 
 /** Avisos crus da companhia — publicados como vieram, nunca reescritos. */
-function readMessages(payload: XmlValue): string[] {
+function readMessages(payload: XmlValue): Array<{ code: string | null; text: string }> {
   return asList(child(payload, 'MarketingMessage'))
-    .map((message) => text(child(message, 'Desc', 'DescText')))
-    .filter((value): value is string => Boolean(value));
+    .map((message) => ({
+      code: text(child(message, 'MarketingMessageID')) ?? text(child(message, 'Code')),
+      text: text(child(message, 'Desc', 'DescText')),
+    }))
+    .filter((message): message is { code: string | null; text: string } => Boolean(message.text));
 }
 
 @Injectable()
@@ -200,7 +202,7 @@ export class LatamProvider implements FlightProvider {
     yield normalizeAirShopping(payload, passengerCount, paxIds);
   }
 
-  async quote(key: OfferKey, dto: QuoteDto, context: RequestContext): Promise<ProviderQuote> {
+  async quote(key: OfferKey, context: RequestContext): Promise<ProviderQuote> {
     const { payload } = await this.commands.offerPrice(key.r, key.i ?? null, key.x ?? [], context);
 
     const offer = asList(child(payload, 'PricedOffer', 'Offer'))[0]
@@ -256,9 +258,8 @@ export class LatamProvider implements FlightProvider {
     };
   }
 
-  async book(key: OfferKey, dto: CreateBookingDto, context: RequestContext): Promise<ProviderBooking> {
-    const email = dto.customer.email;
-    const phone = dto.customer.phone;
+  async book(key: OfferKey, input: BookingInput, context: RequestContext): Promise<ProviderBooking> {
+    const { email, phone } = input.customer;
 
     /**
      * 🔴 A LATAM EXIGE o contato: sem ele o OrderCreate volta
@@ -276,7 +277,7 @@ export class LatamProvider implements FlightProvider {
       });
     }
 
-    const people = Object.entries(dto.people);
+    const people = input.people;
     if (people.length === 0) {
       throw new AppError('SEARCH_VALIDATION_ERROR', {
         metadata: { operation: 'createBooking' },
@@ -290,11 +291,12 @@ export class LatamProvider implements FlightProvider {
      * `Birthdate` antes do nome. Fora dessa sequência a LATAM devolve
      * `cvc-complex-type.2.4.a` sem dizer qual campo está no lugar errado.
      *
-     * 🔴 O PaxID é a CHAVE do mapa, não um contador nosso. A oferta foi tarifada
+     * 🔴 O PaxID é o `identifier` do pedido, não um contador nosso. A oferta foi tarifada
      * com uma lista específica de PaxIDs e o `SelectedOfferItem` referencia
      * exatamente ela — renumerar aqui produz `PaxIDKeyRef` não encontrada.
      */
-    const paxList = people.map(([paxId, person]: [string, BookingPersonDto]) => {
+    const paxList = people.map((person) => {
+      const paxId = person.id;
       const ptc = PTC_BY_AGE_GROUP[person.ageGroup] ?? paxId.split('_')[0].toUpperCase();
       const document = person.document;
 
@@ -869,6 +871,10 @@ export class LatamProvider implements FlightProvider {
     return {
       // O localizador que o passageiro usa é o PNR, quando a LATAM o devolve.
       locator: text(child(order, 'BookingRef', 'ID')) ?? text(child(order, 'BookingRefID')) ?? orderId,
+      // O `OrderID` NDC é outro identificador que o PNR, e o contrato o publica à parte.
+      orderIdentifier: orderId,
+      // A LATAM não endereça a ordem por token.
+      bookingToken: null,
       committed: true,
       // 🔴 Nunca deduzido de `committed`: só status final de sucesso confirma.
       confirmed: CONFIRMED_STATUSES.has(status),

@@ -7,8 +7,8 @@
  */
 import { OfferKey } from '../../common/utils/offer-key';
 import { AvailabilityDto } from '../flight/dto/availability.dto';
-import { CreateBookingDto, FareRulesDto, QuoteDto } from '../flight/dto/booking.dto';
-import { Baggage, Leg } from '../flight/flight.types';
+import { FareRulesDto } from '../flight/dto/booking.dto';
+import { Leg } from '../flight/flight.types';
 import type { RequiredParameter as ProviderRequiredParameter } from './travelfusion/normalizers/luggage.normalizer';
 
 export interface RequestContext {
@@ -85,8 +85,48 @@ export interface ProviderPassenger {
   lastName: string | null;
 }
 
+/**
+ * Um viajante, já traduzido do `people[]` do contrato.
+ *
+ * 🔴 `id` é o `identifier` do pedido e chega à companhia como veio: na LATAM é
+ * o PaxID com que a oferta foi tarifada, e renumerar produz `PaxIDKeyRef` não
+ * encontrada.
+ */
+export interface BookingPersonInput {
+  id: string;
+  title?: string;
+  firstName: string;
+  lastName: string;
+  ageGroup: 'adult' | 'child' | 'infant';
+  /** `YYYY-MM-DD`. */
+  birthDate: string;
+  gender?: string;
+  document?: { type: string; number: string; issuingCountry?: string; expiryDate?: string };
+  email?: string;
+  /** Parâmetros que o provedor exigiu no /quote, por passageiro. */
+  customParameters?: Record<string, string>;
+}
+
+/**
+ * O que um provedor precisa para reservar — o recorte do `POST /booking` que
+ * a companhia de fato consome. O caso de uso traduz o contrato para cá, e os
+ * provedores não conhecem o formato do corpo HTTP.
+ */
+export interface BookingInput {
+  customer: { email: string | null; phone: string | null };
+  people: BookingPersonInput[];
+  /** Data de referência para conferir idade: a do último trecho da viagem. */
+  referenceDate: string | null;
+  /** Parâmetros do nível da reserva exigidos no /quote. */
+  customParameters?: Record<string, string>;
+}
+
 export interface ProviderBooking {
   locator: string | null;
+  /** Identificador de pedido separado do localizador, quando a companhia tem. */
+  orderIdentifier?: string | null;
+  /** Token de reserva, quando a companhia endereça por ele. */
+  bookingToken?: string | null;
   committed: boolean;
   /** 🔴 Só `true` no status final de sucesso. Nunca deduzido de `committed`. */
   confirmed: boolean;
@@ -210,9 +250,9 @@ export interface FlightProvider {
 
   search(request: AvailabilityDto, context: RequestContext): AsyncGenerator<ProviderOffer[]>;
 
-  quote(key: OfferKey, dto: QuoteDto, context: RequestContext): Promise<ProviderQuote>;
+  quote(key: OfferKey, context: RequestContext): Promise<ProviderQuote>;
 
-  book(key: OfferKey, dto: CreateBookingDto, context: RequestContext): Promise<ProviderBooking>;
+  book(key: OfferKey, input: BookingInput, context: RequestContext): Promise<ProviderBooking>;
 
   retrieve(locator: string, context: RequestContext): Promise<ProviderRetrieval>;
 
@@ -228,7 +268,7 @@ export interface FlightProvider {
    * Mapa de assentos. Opcional, e endereçado pela CHAVE DA OFERTA — na LATAM a
    * escolha acontece antes de reservar, e o localizador ainda não existe.
    */
-  seatMap?(key: OfferKey, journeyKey?: string, context?: RequestContext): Promise<ProviderSeatMap>;
+  seatMap?(key: OfferKey, context: RequestContext): Promise<ProviderSeatMap>;
 
   /** Opcionais vendidos à parte. Endereçado pela oferta, como o mapa. */
   ancillaries?(key: OfferKey, context: RequestContext): Promise<ProviderAncillaryCatalog>;
@@ -356,8 +396,8 @@ export interface ProviderIssue {
   tickets: ProviderTicket[];
   /** EMDs de bagagem/assento materializados junto, quando existirem. */
   emds: ProviderTicket[];
-  /** Avisos CRUS da companhia. */
-  messages: string[];
+  /** Avisos CRUS da companhia — `{code, text}`, repassados sem tradução. */
+  messages: Array<{ code: string | null; text: string }>;
 }
 
 /**
@@ -406,7 +446,7 @@ export interface ProviderAncillary {
   passengerId: string | null;
   segmentId: string | null;
   /** Franquia estruturada, quando a companhia a descreve. */
-  baggage: Baggage | null;
+  baggage: { pieces: number | null; weight: number | null; unit: string | null } | null;
 }
 
 export interface ProviderSeat {
@@ -422,8 +462,13 @@ export interface ProviderSeat {
   providerCharacteristics: string[];
   commercialName: string | null;
   accessible: boolean | null;
-  recline: boolean | null;
-  /** Opaca: mesmo par do opcional. */
+  /** Restrição de reclinação: `"restricted"` ou `null` — 09-assentos.md §1.6. */
+  recline: 'restricted' | null;
+  /**
+   * Extensão declarada, a 13ª chave: a chave opaca de venda do assento. É o que
+   * permite comprar assento e bagagem num `/sell-ancillaries` só — uma cobrança,
+   * não duas. O caminho canônico, pelo designador, é o `/mark-seats`.
+   */
   key: string | null;
 }
 

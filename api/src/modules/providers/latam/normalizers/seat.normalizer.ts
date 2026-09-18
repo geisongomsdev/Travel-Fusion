@@ -172,7 +172,7 @@ export function normalizeSeatMap(payload: XmlValue): ProviderSeatMap {
             providerCharacteristics: raw,
             commercialName: itemId ? nameByItem.get(itemId) ?? null : null,
             accessible: raw.some((code) => ACCESSIBLE.has(code.toUpperCase())) ? true : null,
-            recline: raw.some((code) => NO_RECLINE.has(code.toUpperCase())) ? false : null,
+            recline: raw.some((code) => NO_RECLINE.has(code.toUpperCase())) ? 'restricted' : null,
             // O par opaco que identifica o assento na compra.
             key: itemId
               ? encodeServiceKey({ o: itemId, s: serviceByItem.get(itemId) ?? null })

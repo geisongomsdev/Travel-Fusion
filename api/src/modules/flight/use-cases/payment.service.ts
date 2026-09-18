@@ -3,7 +3,7 @@ import { AppError } from '../../../common/errors/app-error';
 import { expiryToMMYY } from '../../../common/utils/card';
 import { ProviderRegistry } from '../../providers/provider.registry';
 import {
-  ProviderCard, ProviderFinancing, ProviderTicket, RequestContext,
+  ProviderCard, ProviderPayment, ProviderTicket, RequestContext,
 } from '../../providers/provider.types';
 import { CreditCardDto, FinancingOptionsDto, IssueDto } from '../dto/booking.dto';
 
@@ -21,12 +21,45 @@ import { CreditCardDto, FinancingOptionsDto, IssueDto } from '../dto/booking.dto
  * `correlationId` e o localizador, nunca o meio de pagamento.
  */
 
+type Money = { currency: string | null; total: number };
+
+/** Um plano de parcelamento — 11-emissao.md §2.3. */
+export interface FinancingPlan {
+  installments: number | null;
+  /** 🔴 O identificador que volta no /issue, em `creditCard.financingId`. */
+  financingId: string | number | null;
+  cardBrand: { code: string | null; name: string | null } | null;
+  /** O único fato sobre juros que dá para afirmar sem adivinhar o período. */
+  interestFree: boolean | null;
+  interest: { monthlyPercent: number | null; amount: Money | null };
+  installmentAmount: Money | null;
+  firstInstallmentAmount: Money | null;
+  totalAmount: Money | null;
+}
+
 export interface FinancingResult {
   provider: string;
   locator: string;
-  cardBrand: string | null;
   currency: string | null;
-  options: ProviderFinancing['options'];
+  /** `provider` = cotação real da companhia; `static-rules` = tabela documentada. */
+  source: 'provider' | 'static-rules';
+  minInstallmentAmount: Money | null;
+  plans: FinancingPlan[];
+}
+
+/** Um documento emitido — 11-emissao.md §3.7. */
+export interface IssuedDocument {
+  ticketNumber: string | null;
+  type: ProviderTicket['type'];
+  passengerId: string | null;
+  passengerName: string | null;
+  status: 'issued' | 'failed' | 'voided' | 'refunded' | 'unknown';
+  providerStatus: string | null;
+  issueDate: string | null;
+  cancelToken: string | null;
+  company: { code: string | null; name: string | null };
+  amount: Money | null;
+  message: string | null;
 }
 
 export interface IssueResult {
@@ -34,16 +67,41 @@ export interface IssueResult {
   locator: string;
   /** A companhia aceitou e gravou. Nunca `null`. */
   committed: boolean;
-  /** 🔴 Prova estruturada de documento emitido. `null` = a prova não existe ainda. */
+  /** 🔴 A companhia DEVOLVEU o número do bilhete. `null` = a prova não existe ainda. */
   confirmed: boolean | null;
   queued: boolean;
-  amount: { currency: string; total: number };
+  /** O que foi REALMENTE cobrado. */
+  amount: Money | null;
   authorizationCode: string | null;
-  tickets: ProviderTicket[];
-  emds: ProviderTicket[];
-  messages: string[];
-  providerStatus: string | null;
+  tickets: IssuedDocument[];
+  emds: IssuedDocument[];
+  messages: Array<{ code: string | null; text: string }>;
 }
+
+/**
+ * O status do documento no vocabulário do contrato.
+ *
+ * 🔴 Fora do mapa vira `unknown`, NUNCA `issued`: assumir emissão a partir de um
+ * status que não se reconhece é reportar uma venda que não existe.
+ */
+const DOCUMENT_STATUS: Record<string, IssuedDocument['status']> = {
+  issued: 'issued', failed: 'failed', voided: 'voided', cancelled: 'voided', refunded: 'refunded',
+};
+
+const toDocument = (ticket: ProviderTicket): IssuedDocument => ({
+  ticketNumber: ticket.ticketNumber,
+  type: ticket.type,
+  passengerId: ticket.passengerId,
+  passengerName: ticket.passengerName,
+  status: DOCUMENT_STATUS[ticket.status ?? ''] ?? 'unknown',
+  providerStatus: ticket.providerStatus,
+  issueDate: ticket.issueDate,
+  // A LATAM anula pelo próprio número do bilhete: não há token.
+  cancelToken: null,
+  company: { code: null, name: null },
+  amount: ticket.amount,
+  message: null,
+});
 
 @Injectable()
 export class PaymentService {
@@ -60,19 +118,39 @@ export class PaymentService {
       throw new AppError('CAPABILITY_NOT_SUPPORTED', { metadata: { operation: 'financingOptions' } });
     }
 
-    const financing = await provider.financingOptions(
-      dto.booking.locator,
-      dto.payment.creditCard.number,
-      context,
-    );
+    const { booking, payment } = dto.financingOptions;
+    const financing = await provider.financingOptions(booking.locator, payment.creditCard.number, context);
+    const currency = financing.currency ?? dto.options?.currency ?? null;
+    const money = (total: number | null): Money | null => (total === null ? null : { currency, total });
+    const brand = financing.cardBrand ? { code: financing.cardBrand, name: null } : null;
 
     return {
       provider: provider.name,
-      locator: dto.booking.locator,
-      cardBrand: financing.cardBrand,
-      currency: financing.currency,
-      // Lista vazia é resposta válida: o cartão pode não aceitar parcelamento.
-      options: financing.options,
+      locator: booking.locator,
+      currency,
+      // A LATAM cota ao vivo, na operadora — não é tabela.
+      source: 'provider',
+      minInstallmentAmount: null,
+      // Lista vazia é resposta válida: o valor pode estar abaixo da parcela mínima.
+      plans: financing.options.map((option) => ({
+        installments: option.installments,
+        financingId: option.id,
+        cardBrand: brand,
+        /**
+         * 🔴 A LATAM informa uma taxa sem dizer de que PERÍODO. Publicá-la como
+         * "mensal" seria um número errado na tela — o que dá para afirmar é
+         * se há juros ou não.
+         */
+        interestFree: option.interestRate === null ? null : option.interestRate === 0,
+        interest: {
+          monthlyPercent: null,
+          amount: option.total !== null && option.interestRate === 0 ? money(0) : null,
+        },
+        installmentAmount: money(option.installmentAmount),
+        // A LATAM não distingue a primeira parcela: igualá-la às demais seria um palpite.
+        firstInstallmentAmount: null,
+        totalAmount: money(option.total),
+      })),
     };
   }
 
@@ -127,16 +205,16 @@ export class PaymentService {
       });
     }
 
-    const currency = current.currency ?? payment.currency ?? 'BRL';
+    const currency = current.currency ?? 'BRL';
 
     const issued = await provider.issue(
       booking.locator,
       {
         card: toProviderCard(payment.creditCard),
-        billing: payment.billing,
+        billing: billingOf(payment.creditCard, 'issue.payment.creditCard'),
         payer: payerOf(payment.creditCard, 'issue.payment.creditCard'),
         amount: { total: expected, currency },
-        installmentId: payment.installmentId ?? null,
+        installmentId: payment.creditCard.financingId === undefined ? null : String(payment.creditCard.financingId),
       },
       context,
     );
@@ -152,10 +230,10 @@ export class PaymentService {
       queued: issued.queued,
       amount: { currency, total: expected },
       authorizationCode: issued.authorizationCode,
-      tickets: issued.tickets,
-      emds: issued.emds,
+      tickets: issued.tickets.map(toDocument),
+      emds: issued.emds.map(toDocument),
+      // Avisos crus da companhia, repassados sem tradução.
       messages: issued.messages,
-      providerStatus: issued.rawStatus,
     };
   }
 }
@@ -163,7 +241,7 @@ export class PaymentService {
 /** O cartão do contrato no vocabulário da fronteira. */
 export function toProviderCard(card: CreditCardDto): ProviderCard {
   return {
-    brand: card.brand,
+    brand: String(card.brand),
     holder: card.holderName,
     number: card.number,
     securityCode: card.cvv,
@@ -182,13 +260,13 @@ export function toProviderCard(card: CreditCardDto): ProviderCard {
  * recusar transformaria um corpo incompleto num erro de integração.
  */
 export function payerOf(card: CreditCardDto, path: string) {
-  if (!card.holderDocument || !card.holderBirthDate) {
+  if (!card.holderCpf || !card.holderBirthdate) {
     throw new AppError('SEARCH_VALIDATION_ERROR', {
       metadata: { operation: 'issue' },
       details: {
         errors: {
-          [`${path}.holderDocument`]: ['Obrigatório: a companhia exige o documento do titular para cobrar.'],
-          [`${path}.holderBirthDate`]: ['Obrigatório: a companhia exige a data de nascimento do titular.'],
+          [`${path}.holderCpf`]: ['Obrigatório: a companhia exige o CPF do titular para cobrar.'],
+          [`${path}.holderBirthdate`]: ['Obrigatório: a companhia exige a data de nascimento do titular.'],
         },
       },
     });
@@ -199,7 +277,41 @@ export function payerOf(card: CreditCardDto, path: string) {
   return {
     firstName: parts[0] ?? card.holderName,
     lastName: parts.slice(1).join(' ') || parts[0] || card.holderName,
-    dateOfBirth: card.holderBirthDate,
-    documentNumber: card.holderDocument,
+    dateOfBirth: card.holderBirthdate,
+    documentNumber: card.holderCpf,
+  };
+}
+
+/**
+ * O endereço de cobrança, a partir do cartão.
+ *
+ * 🔴 O `/order/change/payment` da LATAM exige `ContactInfo` de cobrança com
+ * e-mail e endereço postal. A recusa acontece aqui, com os campos nomeados.
+ */
+export function billingOf(card: CreditCardDto, path: string): ProviderPayment['billing'] {
+  const address = card.billingAddress;
+  const missing = [
+    !card.holderEmail && 'holderEmail',
+    !address?.zipCode && 'billingAddress.zipCode',
+    !address?.street && 'billingAddress.street',
+    !address?.country && 'billingAddress.country',
+  ].filter((field): field is string => Boolean(field));
+
+  if (missing.length > 0) {
+    throw new AppError('SEARCH_VALIDATION_ERROR', {
+      metadata: { operation: 'issue' },
+      details: {
+        errors: Object.fromEntries(
+          missing.map((field) => [`${path}.${field}`, ['Obrigatório: a companhia exige para cobrar no cartão.']]),
+        ),
+      },
+    });
+  }
+
+  return {
+    email: card.holderEmail!,
+    countryCode: address!.country!,
+    postalCode: address!.zipCode!,
+    street: address!.street!,
   };
 }

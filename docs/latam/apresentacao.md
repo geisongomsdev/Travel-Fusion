@@ -206,8 +206,9 @@ Se perguntarem "o que tem de diferente aqui?":
    cabine desconhecida é `null`; cancelamento sem confirmação é `pending`.
 4. **Erros acionáveis.** 18 códigos fixos, `correlationId` em tudo, credencial ausente vira 401 com a
    instrução, e o XML cru nunca vai para quem chama.
-5. **Honestidade de contrato.** O que não existe responde 501 com o motivo. Onde a API diverge do
-   contrato (assentos pela oferta), a divergência está documentada.
+5. **Fidelidade ao contrato.** Corpo, resposta, nomes de campo e códigos seguem o contrato da Pass.
+   O que não existe responde 501 com o motivo; o que a API faz a mais é extensão declarada e aditiva
+   (assentos pela oferta, a chave de venda do assento), nunca um formato diferente.
 6. **Testes que conhecem o provedor.** O normalizador é testado contra uma resposta real de 433 KB do
    portal, e o dublê repete as validações que a LATAM faz.
 
@@ -305,15 +306,15 @@ normalmente. Quem consome diferencia pelo `canonicalCode`.
 Porque foi medido: pedindo executiva à LATAM vieram 0 ofertas; sem o filtro vieram 424, 12 de
 executiva. Filtrar na LATAM escondia voo que existe.
 
-**Por que `/seat-map` diverge do contrato?**
-O contrato endereça o mapa pelo localizador, supondo escolha depois de reservar. Na LATAM a vitrine
-de assentos responde pela oferta, antes de o localizador existir. A divergência está documentada no
-Swagger e no `rotas.md`.
+**O `/seat-map` segue o contrato?**
+Sim: `seatMap.booking.locator` devolve o mapa da reserva, como o contrato define. Na LATAM a vitrine
+também responde pela oferta, antes de o localizador existir — isso é uma **extensão** declarada
+(`seatMap.fareId`), e não um formato alternativo.
 
-**Por que existem `/order-seat-map` e `/order-ancillaries`, que o contrato não tem?**
-A LATAM tem dois catálogos. O da oferta devolve ids `SEI|…`, que morrem na emissão; o da reserva
-devolve `SEAT_…`/`BAG_…`, os únicos que a compra aceita. Misturar os dois é o erro
-`INVALID_OFFER_TYPES`.
+**Por que dois catálogos de assento?**
+A LATAM tem dois. O da oferta devolve ids `SEI|…`, que morrem na emissão; o da reserva devolve
+`SEAT_…`/`BAG_…`, os únicos que a compra aceita. Misturar os dois é o erro `INVALID_OFFER_TYPES`.
+Os dois saem da mesma rota: muda só o endereço (`fareId` ou `booking`).
 
 **Por que 501 e não 404?**
 404 diria "essa rota não existe". 501 diz "a rota existe no contrato, este provedor não a atende", e

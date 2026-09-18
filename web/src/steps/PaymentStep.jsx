@@ -89,12 +89,13 @@ export function PaymentStep({
       creditCard: {
         ...card,
         holderName: `${holder.firstName} ${holder.lastName}`.trim(),
-        holderDocument: holder.documentNumber,
-        holderBirthDate: holder.dateOfBirth,
+        holderCpf: holder.documentNumber,
+        holderBirthdate: holder.dateOfBirth,
         holderEmail: billing.email,
+        billingAddress: { zipCode: billing.postalCode, street: billing.street, country: billing.countryCode },
+        // O plano escolhido volta pelo id que o /financing-options devolveu.
+        ...(chosen ? { financingId: chosen.financingId, installments: chosen.installments } : {}),
       },
-      billing,
-      installmentId: chosen?.id ?? null,
     });
   };
 
@@ -252,10 +253,10 @@ function Installments({ options, loading, chosen, amount, currency, onLoad, onCh
       {options?.length > 0 && (
         <div className="grid gap-2 sm:grid-cols-2">
           {options.map((option) => {
-            const selected = chosen?.id === option.id;
+            const selected = chosen?.financingId === option.financingId;
             return (
               <button
-                key={option.id}
+                key={option.financingId}
                 type="button"
                 onClick={() => onChoose(selected ? null : option)}
                 className={cn(
@@ -264,12 +265,12 @@ function Installments({ options, loading, chosen, amount, currency, onLoad, onCh
                 )}
               >
                 <p className="text-sm font-medium tabular-nums">
-                  {option.installments}x de {formatMoney(option.installmentAmount, currency)}
+                  {option.installments}x de {formatMoney(option.installmentAmount?.total, currency)}
                 </p>
                 <p className="text-xs text-muted-foreground tabular-nums">
                   {/* Juros zero é o caso comum aqui, e vale dizer com todas as letras. */}
-                  {option.interestRate ? 'com juros · ' : 'sem juros · '}
-                  {formatMoney(option.total ?? amount, currency)}
+                  {option.interestFree === false ? 'com juros · ' : option.interestFree ? 'sem juros · ' : ''}
+                  {formatMoney(option.totalAmount?.total ?? amount, currency)}
                 </p>
               </button>
             );

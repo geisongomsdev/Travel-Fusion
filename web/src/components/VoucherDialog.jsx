@@ -4,6 +4,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { formatMoney } from '@/lib/utils';
+import { legsOf } from '@/steps/BookingStep';
 
 /**
  * O bilhete.
@@ -20,10 +21,14 @@ import { formatMoney } from '@/lib/utils';
  * geramos arquivo: o navegador já faz isso, e melhor.
  */
 export function VoucherDialog({ open, onOpenChange, locator, retrieved, paid, items }) {
-  const passenger = retrieved?.passengers?.[0];
-  // Os trechos físicos de todas as pernas, na ordem da viagem.
-  const flights = (retrieved?.segments?.journeys ?? []).flatMap((journey) => journey.flights ?? []);
-  const currency = retrieved?.booking?.currency;
+  const passenger = retrieved?.people?.find((person) => person.main) ?? retrieved?.people?.[0];
+  const tickets = (retrieved?.fields?.tickets ?? []).filter(
+    (ticket) => !passenger?.id || ticket.passengerId === passenger.id,
+  );
+  // Os voos de todas as pernas, na ordem da viagem.
+  const flights = legsOf(retrieved).flatMap((leg) => leg.flights ?? []);
+  const cabin = retrieved?.fares?.[0]?.cabin;
+  const currency = retrieved?.currency;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -56,9 +61,9 @@ export function VoucherDialog({ open, onOpenChange, locator, retrieved, paid, it
                 <p className="text-sm text-muted-foreground">Documento {passenger.document.number}</p>
               )}
               {/* 🔴 `[]` é legítimo: reserva sem emissão não tem documento. */}
-              {passenger.tickets?.length > 0 && (
+              {tickets.length > 0 && (
                 <p className="text-sm text-muted-foreground">
-                  Bilhete {passenger.tickets.map((ticket) => ticket.ticketNumber).filter(Boolean).join(', ')}
+                  Bilhete {tickets.map((ticket) => ticket.ticketNumber).filter(Boolean).join(', ')}
                 </p>
               )}
             </div>
@@ -68,21 +73,21 @@ export function VoucherDialog({ open, onOpenChange, locator, retrieved, paid, it
             <div className="space-y-3">
               <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Voo</p>
               {flights.map((segment, index) => (
-                <div key={segment.segmentId ?? index} className="rounded-md border px-3 py-2.5">
+                <div key={index} className="rounded-md border px-3 py-2.5">
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
                     <p className="font-medium tabular-nums">
-                      {segment.origin} {formatClock(segment.departure)} → {segment.destination}{' '}
-                      {formatClock(segment.arrival)}
+                      {segment.origin?.iata} {formatClock(segment.time?.departure)} → {segment.destination?.iata}{' '}
+                      {formatClock(segment.time?.arrival)}
                     </p>
                     <p className="text-sm text-muted-foreground">
                       {segment.company?.code}
-                      {segment.company?.number}
+                      {segment.number}
                     </p>
                   </div>
                   <p className="text-sm text-muted-foreground">
-                    {formatDay(segment.departure)}
-                    {segment.cabin ? ` · ${segment.cabin.toLowerCase()}` : ''}
-                    {segment.aircraft ? ` · ${segment.aircraft}` : ''}
+                    {formatDay(segment.time?.departure)}
+                    {cabin ? ` · ${cabin.replace('_', ' ')}` : ''}
+                    {segment.equipment?.code ? ` · ${segment.equipment.code}` : ''}
                   </p>
                 </div>
               ))}
@@ -95,7 +100,7 @@ export function VoucherDialog({ open, onOpenChange, locator, retrieved, paid, it
               {items.map((item, index) => (
                 <p key={item.key ?? index} className="text-sm">
                   {item.name ?? 'Serviço'}
-                  {item.emdNumber ? ` · ${item.emdNumber}` : ''}
+                  {item.documentNumber ? ` · ${item.documentNumber}` : ''}
                 </p>
               ))}
             </div>

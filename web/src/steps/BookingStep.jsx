@@ -20,7 +20,7 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
     title: 'Mr',
     firstName: 'Andy',
     lastName: 'Peterson',
-    birthDate: '1990-04-21',
+    birthdate: '1990-04-21',
     documentNumber: 'AAB0302',
   });
 
@@ -53,19 +53,24 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
     const { documentNumber, ...individual } = passenger;
 
     /**
-     * 🔴 `people` é um MAPA com o PaxID na chave. A oferta foi tarifada para
-     * uma composição específica, e é o PaxID que amarra tarifa, assento e
-     * bilhete ao passageiro certo.
+     * 🔴 `identifier` é o PaxID. A oferta foi tarifada para uma composição
+     * específica, e é ele que amarra tarifa, assento e bilhete ao passageiro
+     * certo.
      */
     onBook(
-      {
-        ADT_1: {
+      [
+        {
+          identifier: 'ADT_1',
+          main: true,
           ...individual,
           ageGroup: 'adult',
           document: { type: 'PASSPORT', number: documentNumber },
         },
+      ],
+      {
+        email: contact.email,
+        ...(contact.phone ? { phone: { number: contact.phone } } : {}),
       },
-      { email: contact.email, phone: contact.phone },
     );
   };
 
@@ -96,12 +101,12 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
                 <Input id="title" value={passenger.title} onChange={updatePassenger('title')} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="birthDate">Data de nascimento</Label>
+                <Label htmlFor="birthdate">Data de nascimento</Label>
                 <Input
-                  id="birthDate"
+                  id="birthdate"
                   type="date"
-                  value={passenger.birthDate}
-                  onChange={updatePassenger('birthDate')}
+                  value={passenger.birthdate}
+                  onChange={updatePassenger('birthdate')}
                 />
               </div>
               <div className="space-y-1.5 sm:col-span-2">
@@ -152,14 +157,15 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
  * o que é polling.
  */
 function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, onPay }) {
-  const locator = booking.booking?.locator;
+  const locator = booking.locator;
   const pending = booking.committed && !booking.confirmed;
-  const status = retrieved?.booking?.status ?? (booking.confirmed ? 'confirmed' : 'pending');
+  const status = retrieved?.status ?? (booking.confirmed ? 'confirmed' : 'pending');
   const cancelled = cancellation?.status === 'CANCELLED' || status === 'cancelled';
 
-  // 🔴 A lista COMPLETA de pernas. Em multidestino `departure`/`return` vêm
-  // `null` de propósito, e só `journeys` tem a viagem inteira.
-  const journeys = retrieved?.segments?.journeys ?? [];
+  // 🔴 `segments` (ida, ida-e-volta) e `itinerary` (multidestino) são
+  // exclusivos: a viagem inteira está em um dos dois.
+  const journeys = legsOf(retrieved);
+  const total = retrieved?.fields?.pricing?.total;
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
@@ -209,7 +215,7 @@ function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, 
                     <p className="text-sm text-muted-foreground">
                       {journey.origin?.iata} → {journey.destination?.iata}
                       {journey.flights?.[0]?.company?.code
-                        ? ` · ${journey.flights[0].company.code}${journey.flights[0].company.number ?? ''}`
+                        ? ` · ${journey.flights[0].company.code}${journey.flights[0].number ?? ''}`
                         : ''}
                       {journey.stops > 0 ? ` · ${journey.stops} parada(s)` : ''}
                     </p>
@@ -219,21 +225,21 @@ function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, 
                   )}
                 </div>
               ))}
-              {retrieved?.total != null && (
+              {total != null && (
                 <p className="border-t pt-3 text-sm">
                   Total{' '}
                   <span className="font-medium">
-                    {formatMoney(retrieved.total, retrieved.booking?.currency)}
+                    {formatMoney(total, retrieved.currency)}
                   </span>
                 </p>
               )}
             </div>
           )}
 
-          {retrieved?.booking?.timeLimit && !cancelled && (
+          {retrieved?.expiresAt && !cancelled && (
             <p className="text-sm text-muted-foreground">
               Pague até{' '}
-              <span className="font-medium text-foreground">{formatDeadline(retrieved.booking.timeLimit)}</span>{' '}
+              <span className="font-medium text-foreground">{formatDeadline(retrieved.expiresAt)}</span>{' '}
               ou a companhia libera o assento.
             </p>
           )}
@@ -277,6 +283,12 @@ function BookingResult({ booking, retrieved, cancellation, running, onRetrieve, 
       </Card>
     </div>
   );
+}
+
+/** As pernas da reserva, de `segments` ou de `itinerary` — 08-retrieve.md §3.5. */
+export function legsOf(retrieved) {
+  if (retrieved?.segments) return [...(retrieved.segments.departure ?? []), ...(retrieved.segments.return ?? [])];
+  return retrieved?.itinerary?.legs ?? [];
 }
 
 /** `245` → `4h05`. A API publica minutos; ninguém lê minutos. */

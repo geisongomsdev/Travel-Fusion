@@ -17,8 +17,7 @@ import { LatamClient } from '../src/modules/providers/latam/latam.client';
 import { LatamCommands } from '../src/modules/providers/latam/latam.commands';
 import { LatamProvider } from '../src/modules/providers/latam/latam.provider';
 import { AvailabilityDto } from '../src/modules/flight/dto/availability.dto';
-import { CreateBookingDto, QuoteDto } from '../src/modules/flight/dto/booking.dto';
-import { ProviderOffer } from '../src/modules/providers/provider.types';
+import { BookingInput, ProviderOffer } from '../src/modules/providers/provider.types';
 import { decodeOfferKey, OfferKey } from '../src/common/utils/offer-key';
 
 const DOUBLE = join(__dirname, 'fixtures', 'latam-ndc-double.mjs');
@@ -93,22 +92,19 @@ const keyOf = (offer: ProviderOffer): OfferKey => {
   return key;
 };
 
-const quoteFor = (offer: ProviderOffer): QuoteDto => ({
-  type: 'roundtrip',
-  offers: [{ fareId: fareIdOf(offer) }],
-});
-
-const bookingFor = (offer: ProviderOffer, overrides: Partial<CreateBookingDto> = {}): CreateBookingDto => ({
+/** O recorte do /booking que chega ao provedor — o caso de uso já traduziu o contrato. */
+const bookingFor = (overrides: Partial<BookingInput> = {}): BookingInput => ({
   customer: { email: 'andy@example.com', phone: '11999999999' },
-  people: {
-    ADT_1: {
+  people: [
+    {
+      id: 'ADT_1',
       firstName: 'Andy',
       lastName: 'Peterson',
       ageGroup: 'adult',
       birthDate: '1990-04-21',
     },
-  },
-  fields: { selectedFareId: fareIdOf(offer), referenceDate: '2026-10-19' },
+  ],
+  referenceDate: '2026-10-19',
   ...overrides,
 });
 
@@ -176,7 +172,7 @@ describe('LatamProvider ponta a ponta', () => {
 
   it('tarifa a oferta pelo fareId que a busca devolveu', async () => {
     const [offer] = await search('roundtrip');
-    const quote = await provider().quote(keyOf(offer), quoteFor(offer), {});
+    const quote = await provider().quote(keyOf(offer), {});
 
     expect(quote.price.total).toBe(625);
     expect(quote.available).toBe(true);
@@ -185,11 +181,13 @@ describe('LatamProvider ponta a ponta', () => {
 
   it('🔴 reserva devolve confirmed só no status final — CLOSED confirma', async () => {
     const [offer] = await search('roundtrip');
-    const booking = await provider().book(keyOf(offer), bookingFor(offer), {});
+    const booking = await provider().book(keyOf(offer), bookingFor(), {});
 
     expect(booking).toMatchObject({
       locator: 'NW6PFQ', committed: true, confirmed: true, status: 'CLOSED',
     });
+    // O OrderID NDC é publicado à parte do PNR — o contrato quer os dois.
+    expect(booking.orderIdentifier).toEqual(expect.any(String));
   });
 
   /**
@@ -203,7 +201,7 @@ describe('LatamProvider ponta a ponta', () => {
     const [offer] = await search('roundtrip');
 
     await expect(
-      provider().book(keyOf(offer), bookingFor(offer, { customer: { email: '' } }), {}),
+      provider().book(keyOf(offer), bookingFor({ customer: { email: null, phone: null } }), {}),
     ).rejects.toMatchObject({
       code: 'SEARCH_VALIDATION_ERROR',
       details: { errors: expect.objectContaining({ 'customer.email': expect.any(Array) }) },
@@ -220,16 +218,17 @@ describe('LatamProvider ponta a ponta', () => {
 
     const booking = await provider().book(
       keyOf(offer),
-      bookingFor(offer, {
-        people: {
-          ADT_1: {
+      bookingFor({
+        people: [
+          {
+            id: 'ADT_1',
             firstName: 'Andy',
             lastName: 'Peterson',
             ageGroup: 'adult',
             birthDate: '1990-04-21',
             document: { type: 'PASSPORT', number: 'AAB0302' },
           },
-        },
+        ],
       }),
       {},
     );
@@ -238,13 +237,13 @@ describe('LatamProvider ponta a ponta', () => {
   });
 
   /**
-   * 🔴 O PaxID é a CHAVE do mapa `people`, não um contador nosso: a oferta foi
+   * 🔴 O PaxID é o `identifier` do pedido, não um contador nosso: a oferta foi
    * tarifada com uma lista específica e o `SelectedOfferItem` referencia
    * exatamente ela. Renumerar produz `PaxIDKeyRef` não encontrada.
    */
   it('🔴 o PaxID do pedido chega à companhia como veio', async () => {
     const [offer] = await search('roundtrip');
-    const booking = await provider().book(keyOf(offer), bookingFor(offer), {});
+    const booking = await provider().book(keyOf(offer), bookingFor(), {});
 
     expect(booking.passengers.map((passenger) => passenger.id)).toContain('ADT_1');
   });

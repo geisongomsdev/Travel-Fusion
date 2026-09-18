@@ -10,8 +10,8 @@ import { RequestContext } from '../providers/provider.types';
 import { AvailabilityDto } from './dto/availability.dto';
 import {
   AncillariesDto, CancelBookingDto, CancelEticketDto, CreateBookingDto, FareRulesDto,
-  FinancingOptionsDto, IssueDto, MarkSeatsDto, OfferCatalogDto, OrderCatalogDto, PaymentOptionsDto,
-  QuoteDto, RemoveSeatsDto, RetrieveDto, RetrieveEticketDto, SellAncillariesDto,
+  FinancingOptionsDto, IssueDto, MarkSeatsDto, PaymentOptionsDto,
+  QuoteDto, RemoveSeatsDto, RetrieveDto, RetrieveEticketDto, SeatMapDto, SellAncillariesDto,
 } from './dto/booking.dto';
 import { PingDto } from './dto/ping.dto';
 import { AvailabilityService } from './use-cases/availability.service';
@@ -35,6 +35,10 @@ const contextOf = (request: FlightRequest): RequestContext => ({
   endUserAgent: request.headers['user-agent'],
 });
 
+/**
+ * 🔴 Toda rota devolve **200**, exceto o `/booking` (201) — 01-convencoes.md §1.
+ * O `@Post` do Nest responde 201 por padrão, por isso cada rota declara o seu.
+ */
 @ApiTags('Voo')
 @Controller()
 @UseGuards(CapabilityGuard)
@@ -93,21 +97,27 @@ export class FlightController {
   }
 
   @Post('quote')
+  @HttpCode(200)
   @Capability('quote')
   @Operation('quote')
   @ApiTags('Venda')
   @ApiOperation({
     summary: 'Tarifar — confirmar o preço firme',
     description: [
-      'Mapeia para `OfferPrice`.',
+      'Mapeia para `OfferPrice`. Contrato: 05-quote.md.',
       '',
-      'O corpo leva `offers[]` — uma seleção por journey; num pacote fechado, uma só cobre',
-      'a viagem inteira. O único campo que decide a venda é `fareId`: os outros são contexto',
-      'de auditoria e **não** substituem a chave.',
+      'O corpo leva `provider`, `options` e o bloco `quote` com `type`, `offers[]` e',
+      '`passengers`. Na LATAM quem decide a venda é o `fareId` (ou `fare.fareId`): o',
+      '`journeyKey` sozinho não abre a oferta.',
       '',
-      'A resposta é PLANA (`base`, `taxes`, `total`), não aninhada em `price`: o tarifar',
-      'devolve um preço só, e repetir a estrutura da busca faria descer dois níveis para',
-      'ler um número.',
+      '🔴 Sem `quote.passengers` é 400: não há default, e `adults: 1` tarifaria uma venda de',
+      'três adultos pelo preço de um.',
+      '',
+      'A resposta é escalar — `rawTotal`, `base`, `taxes`, com `base + taxes == rawTotal` —,',
+      'mais as extensões `familyCode`, `family` e `requiredParameters`.',
+      '',
+      'O cenário pós-reserva (`quote.booking`) responde **501**: a companhia só devolve o total',
+      'de uma ordem, e o invariante não fecha com metade dos números.',
     ].join('\n'),
   })
   @ApiBody({ type: QuoteDto })
@@ -124,16 +134,19 @@ export class FlightController {
   @ApiOperation({
     summary: 'Reservar',
     description: [
-      'Mapeia para `OrderCreate`. Segura o assento e **não cobra nada**.',
+      'Mapeia para `OrderCreate`. Segura o assento e **não cobra nada**. Contrato: 06-booking.md.',
       '',
-      '🔴 `people` é um MAPA, com o PaxID na chave (`ADT_1`, `CHD_1`). Não é enfeite: é o',
-      'PaxID que amarra tarifa, assento, bagagem e bilhete ao passageiro certo, e a oferta',
-      'foi tarifada com uma lista específica. Uma lista posicional funciona até o primeiro',
-      'pedido com criança.',
+      'Os trechos (`segments`/`itinerary`) e a tarifa (`fares[]`) vêm da busca, copiados como',
+      'vieram. Quem decide a venda é `selectedFareId`, que tem que existir em `fares[]`.',
       '',
-      '🔴 `committed` ≠ `confirmed`. `committed:true` diz que a reserva foi aceita pelo',
-      'provedor; `confirmed` só vira `true` no status final de sucesso, e **nunca é',
-      'deduzido** de `committed`. Status não-final não autoriza re-reservar — a reserva',
+      '🔴 `people[].identifier` é o PaxID com que a oferta foi tarifada (`ADT_1`, `CHD_1`):',
+      'é ele que amarra tarifa, assento, bagagem e bilhete ao passageiro certo.',
+      '',
+      '🔴 Com `displayedTotal`, a tarifa é reconferida antes de reservar: preço maior é 409',
+      '`FARE_PRICE_CHANGED`, e nada é reservado.',
+      '',
+      'A resposta traz `locator`, `status`, `bookingToken` e `orderIdentifier` no topo.',
+      '`committed` ≠ `confirmed`: status não-final não autoriza re-reservar — a reserva',
       'pode existir do outro lado.',
       '',
       'Devolve **HTTP 201**; todas as outras rotas devolvem 200.',
@@ -146,21 +159,23 @@ export class FlightController {
   }
 
   @Post('retrieve')
+  @HttpCode(200)
   @Capability('retrieve')
+  @RawResponse()
   @ApiTags('Pós-venda')
   @ApiOperation({
     summary: 'Consultar a reserva',
     description: [
       'Mapeia para `OrderRetrieve`. **Sem cache** — toda chamada vai à companhia,',
-      'porque o ponto da rota é saber o estado *agora*.',
+      'porque o ponto da rota é saber o estado *agora*. Contrato: 08-retrieve.md.',
       '',
-      'Esta rota usava um envelope PRÓPRIO, de seis chaves. Agora usa o mesmo',
-      '`{success, data, meta}` das outras — era exatamente o tipo de exceção que obrigava',
-      'quem consome a escrever um caminho especial por rota.',
+      'É a ÚNICA rota com envelope próprio, como o contrato define: `success`, `connector`,',
+      '`booking`, `status: "found"`, `message` e `data` — sem `meta`.',
       '',
-      '🔴 `segments.journeys` é a lista COMPLETA das pernas. Em multidestino `departure` e',
-      '`return` vêm `null` de propósito: eleger a primeira perna como "ida" inventaria uma',
-      'ida-e-volta que ninguém comprou.',
+      '🔴 `segments` (ida, ida-e-volta) e `itinerary` (multidestino) são mutuamente',
+      'exclusivos. Num `oneway`, `segments.return` é `[]`.',
+      '',
+      'Reserva cancelada é **200**; localizador inexistente é **404**.',
     ].join('\n'),
   })
   @ApiBody({ type: RetrieveDto })
@@ -170,6 +185,7 @@ export class FlightController {
   }
 
   @Post('fare-rules')
+  @HttpCode(200)
   @Capability('fareRules')
   @Operation('fareRules')
   @ApiTags('Pós-venda')
@@ -193,6 +209,7 @@ export class FlightController {
   }
 
   @Post('ping')
+  @HttpCode(200)
   @Capability('ping')
   @Operation('ping')
   @ApiTags('Diagnóstico')
@@ -214,6 +231,7 @@ export class FlightController {
   }
 
   @Post('cancel-booking')
+  @HttpCode(200)
   @Capability('cancelBooking')
   @Operation('cancelBooking')
   @ApiTags('Pós-venda')
@@ -243,69 +261,37 @@ export class FlightController {
   }
 
   @Post('seat-map')
+  @HttpCode(200)
   @Capability('seatMap')
   @Operation('seatMap')
   @ApiTags('Assentos')
   @ApiOperation({
-    summary: 'Mapa de assentos da oferta',
+    summary: 'Mapa de assentos',
     description: [
-      'Read-only: não marca nada.',
+      'Read-only: não marca nada. Contrato: 09-assentos.md §1.',
       '',
-      '🔴 **Divergência consciente, e a única do dialeto.** O modelo canônico endereça o mapa',
-      'pelo LOCALIZADOR, assumindo escolha pós-reserva. Na LATAM o `/seats/availability`',
-      'responde pela OFERTA — a escolha é anterior, e o localizador ainda não existe. Por',
-      'isso o corpo leva `fareId`, e `locator` volta `null`.',
+      'Endereçado pela RESERVA, em `seatMap.booking` — é o mapa de onde saem os',
+      '`passengerId`, `segmentId` e `seat` que o /mark-seats aceita.',
       '',
-      'O caso do modelo continua atendido pelo `/order-seat-map`, que responde pela reserva.',
+      '**Extensão declarada:** `seatMap.fareId` devolve o mapa da OFERTA, antes de reservar',
+      '(`locator: null`). Na LATAM a escolha costuma acontecer ali, mas as chaves desse mapa',
+      'morrem na emissão.',
+      '',
+      'Cada assento traz as 12 chaves do contrato mais `key`, a chave de venda — que permite',
+      'comprar assento e bagagem num /sell-ancillaries só.',
       '',
       'Mapa ilegível degrada para `segments: []`, nunca 500: a leitura degrada, a mutação falha.',
     ].join('\n'),
   })
-  @ApiBody({ type: OfferCatalogDto })
-  async seatMap(@Body() dto: OfferCatalogDto, @Req() request: FlightRequest) {
+  @ApiBody({ type: SeatMapDto })
+  async seatMap(@Body() dto: SeatMapDto, @Req() request: FlightRequest) {
     return this.seats.execute(dto, contextOf(request));
   }
 
-  /**
-   * O mapa de assentos de uma reserva JÁ EMITIDA — o catálogo de onde saem os
-   * identificadores que o /sell-ancillaries aceita.
-   */
-  @Post('order-seat-map')
-  @Capability('seatMap')
-  @Operation('seatMap')
-  @ApiTags('Assentos')
-  @ApiOperation({
-    summary: 'Mapa de assentos da reserva emitida',
-    description: [
-      'Read-only. Endereçado pelo LOCALIZADOR, ao contrário do /seat-map, que responde pela oferta.',
-      '',
-      '🔴 **Não é o mesmo catálogo.** As chaves daqui são as únicas que o /sell-ancillaries',
-      'aceita; as do /seat-map morrem na emissão. Usar uma no lugar da outra faz a companhia',
-      'recusar com `INVALID_OFFER_TYPES`.',
-    ].join('\n'),
-  })
-  @ApiBody({ type: OrderCatalogDto })
-  async orderSeatMap(@Body() dto: OrderCatalogDto, @Req() request: FlightRequest) {
-    return this.postSale.seatMap(dto, contextOf(request));
-  }
-
-  /** Idem, para bagagem e demais opcionais. */
-  @Post('order-ancillaries')
-  @Capability('ancillaries')
-  @Operation('ancillaries')
-  @ApiTags('Assentos')
-  @ApiOperation({
-    summary: 'Opcionais da reserva emitida',
-    description: 'Read-only. Mesmo par de catálogos do /order-seat-map, endereçado pelo localizador.',
-  })
-  @ApiBody({ type: OrderCatalogDto })
-  async orderAncillaries(@Body() dto: OrderCatalogDto, @Req() request: FlightRequest) {
-    return this.postSale.ancillaries(dto, contextOf(request));
-  }
-
   @Post('mark-seats')
+  @HttpCode(200)
   @Capability('markSeats')
-  @Operation('markSeats')
+  @Operation('assignSeats')
   @ApiTags('Assentos')
   @ApiOperation({
     summary: 'Marcar assentos na reserva emitida',
@@ -317,8 +303,12 @@ export class FlightController {
       'escolheu na tela. A tradução para a chave que a companhia vende acontece do lado de',
       'cá, relendo o mapa da própria reserva.',
       '',
-      '🔴 Assento fora do mapa é recusado ANTES da rede: melhor não oferecer do que oferecer',
+      '🔴 Assento fora do mapa, designador malformado ou passageiro que a reserva não tem são',
+      '**422 `BUSINESS_RULE_VIOLATION`** ANTES da rede: melhor não oferecer do que oferecer',
       'e falhar depois.',
+      '',
+      'A resposta traz um item em `seats[]` por assento PEDIDO, com o `segmentId` ecoado do',
+      'pedido. `meta.operation` é `assignSeats`. Contrato: 09-assentos.md §2.',
     ].join('\n'),
   })
   @ApiBody({ type: MarkSeatsDto })
@@ -335,21 +325,23 @@ export class FlightController {
   removeSeats(@Body() _dto: RemoveSeatsDto): never { throw notSupported('removeSeats'); }
 
   @Post('ancillaries')
+  @HttpCode(200)
   @Capability('ancillaries')
   @Operation('ancillaries')
   @ApiTags('Assentos')
   @ApiOperation({
     summary: 'Opcionais vendidos à parte',
     description: [
-      'Read-only. Endereçado pela OFERTA, como o /seat-map — mesma divergência, mesma razão.',
+      'Read-only. Endereçado pela RESERVA, em `ancillaries.booking`. Contrato: 10-ancillaries.md §1.',
       '',
-      'Devolve o catálogo completo: `passengers`, `segments` e `offers`. Sem os dois',
-      'primeiros, as ofertas viriam amarradas a ids que quem consome não sabe traduzir.',
+      '**Extensão declarada:** `ancillaries.fareId` devolve o catálogo da OFERTA, antes de',
+      'reservar — mesma razão do /seat-map.',
       '',
-      'Assentos são filtrados fora: eles vêm no /seat-map, com fileira e coluna.',
+      'Devolve `passengers`, `segments` e `offers`. A `offers[].key` vai literalmente para',
+      '`sellAncillaries.items[].key`.',
       '',
-      '🔴 Oferta sem `passengerId`/`segmentId` vale para TODOS — `null` ali significa "a',
-      'viagem inteira", não "nenhum", e os filtros do pedido respeitam isso.',
+      '🔴 O filtro `type` é ESTRITO: oferta sem tipo declarado sai. Já oferta sem',
+      '`passengerId`/`segmentId` vale para TODOS — `null` ali é "a viagem inteira".',
     ].join('\n'),
   })
   @ApiBody({ type: AncillariesDto })
@@ -358,6 +350,7 @@ export class FlightController {
   }
 
   @Post('sell-ancillaries')
+  @HttpCode(200)
   @Capability('sellAncillaries')
   @Operation('sellAncillaries')
   @ApiTags('Assentos')
@@ -372,8 +365,11 @@ export class FlightController {
       '',
       'Cada item usa a `key` opaca vinda do catálogo POR RESERVA, devolvida intacta.',
       '',
-      'Exige reserva EMITIDA. Cartão é dispensável só quando os opcionais somam zero —',
-      'assento cortesia, que a companhia liquida por BSP.',
+      'Exige reserva EMITIDA. A LATAM cobra na hora: cartão ausente com soma maior que zero é',
+      '**422 `BUSINESS_RULE_VIOLATION`**. Só assento cortesia (soma zero) dispensa o cartão.',
+      '',
+      'A resposta traz um item por item PEDIDO, com `status` (`booked` | `issued` | `failed`)',
+      'e `documentNumber`. Nenhum item aceito é erro, não 200. Contrato: 10-ancillaries.md §3.',
     ].join('\n'),
   })
   @ApiBody({ type: SellAncillariesDto })
@@ -382,6 +378,7 @@ export class FlightController {
   }
 
   @Post('payment-options')
+  @HttpCode(200)
   @Capability('paymentOptions')
   @ApiTags('Não suportado pelo provedor')
   @ApiOperation(NOT_SUPPORTED_ROUTES.paymentOptions)
@@ -389,19 +386,26 @@ export class FlightController {
   paymentOptions(@Body() _dto: PaymentOptionsDto): never { throw notSupported('paymentOptions'); }
 
   @Post('financing-options')
+  @HttpCode(200)
   @Capability('financingOptions')
   @Operation('financingOptions')
   @ApiTags('Pagamento')
   @ApiOperation({
     summary: 'Parcelas que o cartão aceita',
     description: [
-      'Read-only: consulta a operadora, não cobra nada.',
+      'Read-only: consulta a operadora, não cobra nada. Contrato: 11-emissao.md §2.',
       '',
-      '🔴 `payment.creditCard.number` é o **número do cartão**. Ele existe no corpo porque a',
+      'O corpo leva o bloco `financingOptions` com `booking` e `payment`. A resposta traz',
+      '`plans[]`; o `plans[].financingId` volta no /issue em `creditCard.financingId`.',
+      '',
+      '🔴 `interest.monthlyPercent` sai `null`: a LATAM informa uma taxa sem dizer de que',
+      'período. `interestFree` é o fato que dá para afirmar.',
+      '',
+      '🔴 `financingOptions.payment.creditCard.number` é o **número do cartão**. Ele existe no corpo porque a',
       'operadora precisa dele para calcular as parcelas — e **não é logado, não é guardado e',
       'não volta na resposta**.',
       '',
-      'Lista vazia é resposta válida: o cartão pode não aceitar parcelamento.',
+      '`plans: []` é resposta válida: o valor pode estar abaixo da parcela mínima.',
     ].join('\n'),
   })
   @ApiBody({ type: FinancingOptionsDto })
@@ -410,6 +414,7 @@ export class FlightController {
   }
 
   @Post('issue')
+  @HttpCode(200)
   @Capability('issue')
   @Operation('issue')
   @ApiTags('Pagamento')
@@ -417,6 +422,11 @@ export class FlightController {
     summary: 'Pagar a reserva',
     description: [
       'Mapeia para `OrderChange` com `PaymentFunctions` — paga uma ordem que já existe.',
+      'Contrato: 11-emissao.md §3.',
+      '',
+      'A LATAM exige no cartão `holderCpf`, `holderBirthdate`, `holderEmail` e',
+      '`billingAddress` (`zipCode`, `street`, `country`). A parcela escolhida vai em',
+      '`creditCard.financingId`.',
       '',
       '🔴 **Mutação não idempotente e sem retry.** Cobrar duas vezes é o pior erro possível.',
       'Se a resposta se perder, o caminho é o `/retrieve` — nunca pagar de novo.',
@@ -439,6 +449,7 @@ export class FlightController {
   }
 
   @Post('retrieve-eticket')
+  @HttpCode(200)
   @Capability('retrieveEticket')
   @ApiTags('Não suportado pelo provedor')
   @ApiOperation(NOT_SUPPORTED_ROUTES.retrieveEticket)
@@ -446,6 +457,7 @@ export class FlightController {
   retrieveEticket(@Body() _dto: RetrieveEticketDto): never { throw notSupported('retrieveEticket'); }
 
   @Post('cancel-eticket')
+  @HttpCode(200)
   @Capability('cancelEticket')
   @ApiTags('Não suportado pelo provedor')
   @ApiOperation(NOT_SUPPORTED_ROUTES.cancelEticket)

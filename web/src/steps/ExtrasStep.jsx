@@ -241,7 +241,7 @@ function ExtrasResult({ purchase, currency }) {
                 <div key={item.key ?? index} className="flex items-baseline justify-between gap-2 text-sm">
                   <span>{humanName(item.name)}</span>
                   <span className="text-muted-foreground">
-                    {item.emdNumber ?? (item.status === 'booked' ? 'confirmado' : item.status ?? '—')}
+                    {item.documentNumber ?? (item.status === 'booked' ? 'confirmado' : item.status ?? '—')}
                   </span>
                 </div>
               ))}

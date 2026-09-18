@@ -57,7 +57,7 @@ export function QuoteStep({
     .filter(sameCurrency)
     .reduce((sum, money) => sum + (money.total ?? 0), 0);
 
-  const total = (quote.total ?? 0) + extrasTotal;
+  const total = (quote.rawTotal ?? 0) + extrasTotal;
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">

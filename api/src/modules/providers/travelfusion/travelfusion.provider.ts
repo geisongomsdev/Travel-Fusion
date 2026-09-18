@@ -5,9 +5,9 @@ import { ageOnFlightDate } from '../../../common/utils/age';
 import { OfferKey } from '../../../common/utils/offer-key';
 import { env, PROVIDER } from '../../../config/env';
 import { AvailabilityDto, legsOf, passengersOf } from '../../flight/dto/availability.dto';
-import { BookingPersonDto, CreateBookingDto, FareRulesDto, QuoteDto } from '../../flight/dto/booking.dto';
+import { FareRulesDto } from '../../flight/dto/booking.dto';
 import {
-  FareRuleSection, FlightProvider, ProviderBooking, ProviderOffer, ProviderProbe, ProviderQuote,
+  BookingInput, BookingPersonInput, FareRuleSection, FlightProvider, ProviderBooking, ProviderOffer, ProviderProbe, ProviderQuote,
   ProviderRetrieval, RequestContext,
 } from '../provider.types';
 import { normalizeRequiredParameters } from './normalizers/luggage.normalizer';
@@ -103,7 +103,7 @@ export class TravelfusionProvider implements FlightProvider {
     }
   }
 
-  async quote(key: OfferKey, dto: QuoteDto, context: RequestContext): Promise<ProviderQuote> {
+  async quote(key: OfferKey, context: RequestContext): Promise<ProviderQuote> {
     const { response } = await this.commands.processDetails(key.r, key.o, key.i, context);
 
     const total = num(response?.TotalPrice);
@@ -136,10 +136,10 @@ export class TravelfusionProvider implements FlightProvider {
     };
   }
 
-  async book(key: OfferKey, dto: CreateBookingDto, context: RequestContext): Promise<ProviderBooking> {
-    const referenceDate = dto.fields.referenceDate ?? new Date().toISOString();
-    const bookingParameters = this.toCustomParameters(dto.fields.customParameters);
-    const people = Object.entries(dto.people);
+  async book(key: OfferKey, input: BookingInput, context: RequestContext): Promise<ProviderBooking> {
+    const referenceDate = input.referenceDate ?? new Date().toISOString();
+    const bookingParameters = this.toCustomParameters(input.customParameters);
+    const people = input.people;
 
     await this.commands.processTerms(
       {
@@ -150,7 +150,7 @@ export class TravelfusionProvider implements FlightProvider {
             ? { CustomSupplierParameter: bookingParameters }
             : undefined,
           TravellerList: {
-            Traveller: people.map(([, person]) => this.buildTraveller(person, referenceDate)),
+            Traveller: people.map((person) => this.buildTraveller(person, referenceDate)),
           },
         },
       },
@@ -176,13 +176,15 @@ export class TravelfusionProvider implements FlightProvider {
 
     return {
       locator: last.supplierReference,
+      orderIdentifier: null,
+      bookingToken: null,
       committed: true,
       confirmed: last.succeeded,
       status: last.status ?? 'BookingInProgress',
       // O CheckBooking não declara moeda na confirmação.
       currency: null,
-      passengers: people.map(([id, person]) => ({
-        id,
+      passengers: people.map((person) => ({
+        id: person.id,
         type: person.ageGroup,
         firstName: person.firstName,
         lastName: person.lastName,
@@ -290,7 +292,7 @@ export class TravelfusionProvider implements FlightProvider {
     return Object.entries(source ?? {}).map(([Name, Value]) => ({ Name, Value }));
   }
 
-  private buildTraveller(person: BookingPersonDto, referenceDate: string): Record<string, unknown> {
+  private buildTraveller(person: BookingPersonInput, referenceDate: string): Record<string, unknown> {
     const perPassenger = this.toCustomParameters(person.customParameters);
 
     return {

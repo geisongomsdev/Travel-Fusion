@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
-  ArrayMinSize, IsArray, IsBoolean, IsDefined, IsIn, IsInt, IsObject, IsOptional, IsString, Length,
+  Allow, ArrayMinSize, IsArray, IsBoolean, IsDefined, IsIn, IsInt, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString,
   Matches, ValidateNested,
 } from 'class-validator';
 import { PassengersDto, TripType } from './availability.dto';
@@ -39,6 +39,21 @@ export class BookingAddressDto {
   @IsString()
   locator!: string;
 
+  @ApiPropertyOptional({ description: 'Quando a companhia endereça a reserva por token.' })
+  @IsOptional()
+  @IsString()
+  bookingToken?: string;
+
+  @ApiPropertyOptional({ description: 'Identificador de pedido, quando a companhia usa um além do localizador.' })
+  @IsOptional()
+  @IsString()
+  orderIdentifier?: string;
+
+  @ApiPropertyOptional({ description: 'Fonte/sistema da reserva.' })
+  @IsOptional()
+  @IsString()
+  source?: string;
+
   @ApiPropertyOptional({ description: 'Sobrenome do passageiro principal, onde a companhia exige.' })
   @IsOptional()
   @IsString()
@@ -52,30 +67,48 @@ export class BookingAddressDto {
 
 // ── Tarifar ───────────────────────────────────────────────────────────────────
 
+/** Terceira forma aceita de identificar a tarifa: `offers[].fare.fareId`. */
+export class QuoteFareRefDto {
+  @ApiPropertyOptional({ description: 'O `fares[].fareId` da busca.' })
+  @IsOptional()
+  @IsString()
+  fareId?: string;
+}
+
 /**
- * Uma oferta escolhida na busca.
+ * Uma oferta escolhida na busca — 05-quote.md §2.2.
  *
- * 🔴 `fareId` é o único campo que decide a venda. Os outros são contexto de
- * auditoria — o que a tela mostrou quando a pessoa clicou — e NÃO substituem a
- * chave: remontar a seleção a partir de `fareCode` + `bookingClass` é o caminho
+ * O contrato aceita três identificadores (`journeyKey`, `fareId`,
+ * `fare.fareId`) e exige ao menos um. Na LATAM quem decide a venda é a TARIFA:
+ * o `journeyKey` sozinho não abre a oferta, e sem `fareId` a resposta é 400.
+ *
+ * 🔴 Os outros campos são contexto de auditoria e NÃO substituem a chave:
+ * remontar a seleção a partir de `fareCode` + `bookingClass` é o caminho
  * clássico para tarifar uma família diferente da que foi exibida.
  */
-export class SelectedOfferDto {
-  @ApiPropertyOptional({ example: 'JOURNEY_1', description: 'A journey do trecho, como veio em `identifier`.' })
+export class QuoteOfferDto {
+  @ApiPropertyOptional({ description: 'O `identifier` do trecho, vindo da busca. Opaco.' })
   @IsOptional()
   @IsString()
   journeyKey?: string;
 
-  @ApiProperty({ description: 'O identificador OPACO vindo de `fares[].fareId`. Devolva intacto, nunca interprete.' })
+  @ApiPropertyOptional({ description: 'O `fares[].fareId` da busca. Opaco — devolva intacto.' })
+  @IsOptional()
   @IsString()
-  fareId!: string;
+  fareId?: string;
 
-  @ApiPropertyOptional({ example: 'Q00QP5ZI' })
+  @ApiPropertyOptional({ type: QuoteFareRefDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => QuoteFareRefDto)
+  fare?: QuoteFareRefDto;
+
+  @ApiPropertyOptional({ example: 'Q00QP5ZI', description: 'Base tarifária.' })
   @IsOptional()
   @IsString()
   fareCode?: string;
 
-  @ApiPropertyOptional({ example: 'Q', description: 'RBD informado na oferta.' })
+  @ApiPropertyOptional({ example: 'Q', description: 'Classe de reserva (RBD).' })
   @IsOptional()
   @IsString()
   bookingClass?: string;
@@ -85,64 +118,94 @@ export class SelectedOfferDto {
   @IsString()
   familyCode?: string;
 
-  @ApiPropertyOptional({ example: ['LA8000'], description: 'Contexto de auditoria do voo escolhido.' })
+  @ApiPropertyOptional({ example: ['8000'], description: 'Números de voo, na ordem dos trechos.' })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
   flightNumbers?: string[];
-}
 
-export class QuoteOptionsDto extends ProviderOptionsDto {
-  @ApiPropertyOptional({ enum: ['pt-br', 'en-us', 'es-es'] })
-  @IsOptional()
-  @IsIn(['pt-br', 'en-us', 'es-es'])
-  language?: string;
-
-  @ApiPropertyOptional({ example: 'BR' })
+  @ApiPropertyOptional({ description: 'Forma singular, legada.' })
   @IsOptional()
   @IsString()
-  @Length(2, 2)
-  country?: string;
+  flightNumber?: string;
 }
 
-export class QuoteDto {
-  @ApiProperty({ enum: ['oneway', 'roundtrip', 'multicity'], description: 'O mesmo tipo da busca que gerou a oferta.' })
-  @IsIn(['oneway', 'roundtrip', 'multicity'])
-  type!: TripType;
-
-  @ApiProperty({
-    type: [SelectedOfferDto],
-    description: 'Uma oferta por journey. Em pacote fechado, uma só cobre a viagem inteira.',
+/**
+ * O bloco `quote`. Pré-reserva (`offers[]`) OU pós-reserva (`booking`) —
+ * 05-quote.md §2 e §3.
+ */
+export class QuoteBlockDto {
+  @ApiPropertyOptional({
+    enum: ['oneway', 'roundtrip', 'multicity'],
+    description: 'Tipo de viagem da oferta. Mande sempre: sem ele o tipo seria adivinhado pela contagem.',
   })
+  @IsOptional()
+  @IsIn(['oneway', 'roundtrip', 'multicity'])
+  type?: TripType;
+
+  @ApiPropertyOptional({
+    type: [QuoteOfferDto],
+    description: 'Um item por trecho ou direção, na ordem. Num pacote, cada item carrega o fareId da tarifa única.',
+  })
+  @IsOptional()
   @IsArray()
   @ArrayMinSize(1)
   @ValidateNested({ each: true })
-  @Type(() => SelectedOfferDto)
-  offers!: SelectedOfferDto[];
+  @Type(() => QuoteOfferDto)
+  offers?: QuoteOfferDto[];
 
-  @ApiPropertyOptional({ type: PassengersDto, description: 'Tem que bater com a contagem que gerou a oferta.' })
+  @ApiPropertyOptional({ type: PassengersDto, description: 'Obrigatório no cenário pré-reserva: sem ele não há default.' })
   @IsOptional()
   @ValidateNested()
   @Type(() => PassengersDto)
   passengers?: PassengersDto;
 
-  @ApiPropertyOptional({ type: QuoteOptionsDto })
+  @ApiPropertyOptional({ description: 'Opções repassadas ao provedor. Objeto livre.', example: { currency: 'BRL' } })
+  @IsOptional()
+  @IsObject()
+  options?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ type: () => BookingAddressDto, description: 'Cenário pós-reserva: o endereço da reserva.' })
   @IsOptional()
   @ValidateNested()
-  @Type(() => QuoteOptionsDto)
-  options?: QuoteOptionsDto;
+  @Type(() => BookingAddressDto)
+  booking?: BookingAddressDto;
+}
+
+export class QuoteDto {
+  @ApiPropertyOptional({ example: 'latam', description: 'Provedor da oferta. A chave da oferta confirma.' })
+  @IsOptional()
+  @IsString()
+  provider?: string;
+
+  @ApiPropertyOptional({ description: 'Opções de runtime. Pode vir vazio.', example: {} })
+  @IsOptional()
+  @IsObject()
+  options?: Record<string, unknown>;
+
+  @ApiProperty({ type: QuoteBlockDto })
+  @IsDefined()
+  @ValidateNested()
+  @Type(() => QuoteBlockDto)
+  quote!: QuoteBlockDto;
 }
 
 // ── Reservar ──────────────────────────────────────────────────────────────────
 
+/** `Document` — 01-convencoes.md §6. */
 export class PassengerDocumentDto {
   @ApiProperty({ enum: ['CPF', 'PASSPORT', 'RG', 'RNE', 'RNM', 'MERCOSUR'], example: 'PASSPORT' })
   @IsIn(['CPF', 'PASSPORT', 'RG', 'RNE', 'RNM', 'MERCOSUR'])
   type!: string;
 
-  @ApiProperty({ example: 'AAB0302' })
+  @ApiProperty({ example: 'AAB0302', description: 'Só dígitos, quando for CPF.' })
   @IsString()
   number!: string;
+
+  @ApiPropertyOptional({ example: 'BR' })
+  @IsOptional()
+  @IsString()
+  nationality?: string;
 
   @ApiPropertyOptional({ example: 'BR' })
   @IsOptional()
@@ -154,33 +217,54 @@ export class PassengerDocumentDto {
   @IsString()
   @Matches(DATE, { message: 'expiryDate deve ser YYYY-MM-DD' })
   expiryDate?: string;
+
+  @ApiPropertyOptional({ example: '2020-01-01' })
+  @IsOptional()
+  @IsString()
+  @Matches(DATE, { message: 'issueDate deve ser YYYY-MM-DD' })
+  issueDate?: string;
 }
 
+/** `ContactPhone` — 01-convencoes.md §6. */
 export class ContactPhoneDto {
   @ApiPropertyOptional({ example: '55' })
   @IsOptional()
   @IsString()
-  countryCode?: string;
+  country?: string;
 
   @ApiPropertyOptional({ example: '11' })
   @IsOptional()
   @IsString()
-  areaCode?: string;
+  area?: string;
 
-  @ApiProperty({ example: '988887777' })
+  @ApiProperty({ example: '988887777', description: 'Sem DDI/DDD separados, o número inteiro vai aqui.' })
   @IsString()
   number!: string;
+
+  @ApiPropertyOptional({ example: 'mobile' })
+  @IsOptional()
+  @IsString()
+  type?: string;
 }
 
 /**
- * Um passageiro. A chave do mapa `people` é o PaxID (`ADT_1`, `CHD_1`, `INF_1`).
+ * Um viajante — 06-booking.md §2.3.
  *
- * 🔴 O PaxID não é decorativo: é ele que a companhia usa para amarrar tarifa,
- * assento, bagagem e bilhete ao passageiro certo. Uma lista posicional
- * funcionaria até o primeiro pedido com criança, quando a ordem que a tela
- * mandou deixa de coincidir com a ordem em que a oferta foi tarifada.
+ * 🔴 `identifier` não é decorativo: é por ele que as rotas de assento e de
+ * extra endereçam o passageiro depois, e na LATAM ele é o PaxID com que a
+ * oferta foi tarifada (`ADT_1`, `CHD_1`, `INF_1`). Renumerar produz
+ * `PaxIDKeyRef` não encontrada.
  */
 export class BookingPersonDto {
+  @ApiProperty({ example: 'ADT_1', description: 'Identificador do passageiro nesta reserva.' })
+  @IsString()
+  identifier!: string;
+
+  @ApiPropertyOptional({ description: '`true` no passageiro principal.' })
+  @IsOptional()
+  @IsBoolean()
+  main?: boolean;
+
   @ApiPropertyOptional({ example: 'Mr' })
   @IsOptional()
   @IsString()
@@ -194,19 +278,32 @@ export class BookingPersonDto {
   @IsString()
   lastName!: string;
 
-  @ApiProperty({ enum: ['adult', 'child', 'infant'], description: 'Converte para o PTC (ADT/CHD/INF).' })
-  @IsIn(['adult', 'child', 'infant'])
-  ageGroup!: string;
+  @ApiPropertyOptional({ enum: ['adult', 'senior', 'child', 'infant'], description: 'Um de `ageGroup` ou `type` é obrigatório.' })
+  @IsOptional()
+  @IsIn(['adult', 'senior', 'child', 'infant'])
+  ageGroup?: string;
 
-  @ApiProperty({ example: '1990-01-01', description: 'YYYY-MM-DD. A idade é conferida na data do voo.' })
+  @ApiPropertyOptional({ enum: ['adult', 'senior', 'child', 'infant'] })
+  @IsOptional()
+  @IsIn(['adult', 'senior', 'child', 'infant'])
+  type?: string;
+
+  @ApiPropertyOptional({ enum: ['male', 'female'] })
+  @IsOptional()
+  @IsIn(['male', 'female'])
+  gender?: string;
+
+  @ApiPropertyOptional({ example: '1990-01-01', description: 'YYYY-MM-DD. A LATAM exige.' })
+  @IsOptional()
+  @IsString()
+  @Matches(DATE, { message: 'birthdate deve ser YYYY-MM-DD' })
+  birthdate?: string;
+
+  @ApiPropertyOptional({ description: 'Grafia alternativa de `birthdate`, também aceita.' })
+  @IsOptional()
   @IsString()
   @Matches(DATE, { message: 'birthDate deve ser YYYY-MM-DD' })
-  birthDate!: string;
-
-  @ApiPropertyOptional({ enum: ['male', 'female', 'unspecified'] })
-  @IsOptional()
-  @IsIn(['male', 'female', 'unspecified'])
-  gender?: string;
+  birthDate?: string;
 
   @ApiPropertyOptional({ type: PassengerDocumentDto })
   @IsOptional()
@@ -225,8 +322,28 @@ export class BookingPersonDto {
   @Type(() => ContactPhoneDto)
   phone?: ContactPhoneDto;
 
+  @ApiPropertyOptional({ example: 'BR' })
+  @IsOptional()
+  @IsString()
+  country?: string;
+
+  @ApiPropertyOptional({ example: 'BR' })
+  @IsOptional()
+  @IsString()
+  nationality?: string;
+
+  @ApiPropertyOptional({ description: 'Mapa `{ IATA da companhia dona do programa: número }`.', example: { LA: '123456' } })
+  @IsOptional()
+  @IsObject()
+  loyalty?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Bebê de colo viajando com este adulto.' })
+  @IsOptional()
+  @IsObject()
+  infantInfo?: Record<string, unknown>;
+
   @ApiPropertyOptional({
-    description: 'Parâmetros que o provedor exigiu no /quote (requiredParameters), por passageiro.',
+    description: 'Extensão declarada: parâmetros que o provedor exigiu no /quote (requiredParameters), por passageiro.',
     example: { OutwardLuggageOptions: '2' },
   })
   @IsOptional()
@@ -234,38 +351,166 @@ export class BookingPersonDto {
   customParameters?: Record<string, string>;
 }
 
+/** O comprador — 06-booking.md §2.2. */
 export class CustomerDto {
-  @ApiProperty({ example: 'buyer@example.test', description: 'Contato do comprador. A LATAM recusa a ordem sem contato.' })
+  @ApiProperty({ example: 'buyer@example.test', description: 'Contato da reserva. A LATAM recusa a ordem sem contato.' })
   @IsString()
   email!: string;
 
-  @ApiPropertyOptional({ example: '5511988887777' })
+  @ApiPropertyOptional({ example: 'Ana' })
   @IsOptional()
   @IsString()
-  phone?: string;
+  firstName?: string;
+
+  @ApiPropertyOptional({ example: 'Example' })
+  @IsOptional()
+  @IsString()
+  lastName?: string;
+
+  @ApiPropertyOptional({ example: 'Ana Example' })
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @ApiPropertyOptional({ type: ContactPhoneDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ContactPhoneDto)
+  phone?: ContactPhoneDto;
+
+  @ApiPropertyOptional({ type: PassengerDocumentDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => PassengerDocumentDto)
+  document?: PassengerDocumentDto;
+
+  @ApiPropertyOptional({ description: '`{street, city, state, zipCode, postal, country}`.' })
+  @IsOptional()
+  @IsObject()
+  address?: Record<string, unknown>;
 
   @ApiPropertyOptional({ example: 'BR' })
   @IsOptional()
   @IsString()
-  @Length(2, 2)
   country?: string;
-}
 
-export class BookingFieldsDto {
-  @ApiProperty({ description: 'A mesma chave opaca tarifada no /quote.' })
-  @IsString()
-  selectedFareId!: string;
-
-  @ApiPropertyOptional({
-    example: '2026-10-12',
-    description: 'Data usada para conferir a idade. Em ida-e-volta, a data da VOLTA.',
-  })
+  @ApiPropertyOptional({ example: '1990-01-01' })
   @IsOptional()
   @IsString()
-  referenceDate?: string;
+  @Matches(DATE, { message: 'birthdate deve ser YYYY-MM-DD' })
+  birthdate?: string;
+
+  @ApiPropertyOptional({ description: 'Grafia alternativa de `birthdate`.' })
+  @IsOptional()
+  @IsString()
+  @Matches(DATE, { message: 'birthDate deve ser YYYY-MM-DD' })
+  birthDate?: string;
+
+  @ApiPropertyOptional({ enum: ['male', 'female'] })
+  @IsOptional()
+  @IsIn(['male', 'female'])
+  gender?: string;
+}
+
+/**
+ * Um trecho, COPIADO DA BUSCA — 06-booking.md §2.5.
+ *
+ * Só `identifier` e `fares[]` são lidos; o resto viaja como veio. O shape
+ * inteiro é o do `/availability`, e não é revalidado aqui para não recusar um
+ * campo que a própria busca publicou.
+ */
+export class BookingLegDto {
+  @ApiProperty({ description: 'O identificador opaco da busca.' })
+  @IsString()
+  identifier!: string;
+
+  @ApiPropertyOptional({ description: 'A tarifa DESTE trecho — só no modelo de trecho solto.', type: 'array' })
+  @IsOptional()
+  @IsArray()
+  @IsObject({ each: true })
+  fares?: Array<Record<string, unknown>>;
+
+  // O resto do trecho, como a busca publicou. Declarado para o `whitelist` não
+  // apagar: é daqui que sai a data de referência da idade.
+  @ApiPropertyOptional({ description: '`{code, name}`.' })
+  @IsOptional()
+  @IsObject()
+  company?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: '`Airport`.' })
+  @IsOptional()
+  @IsObject()
+  origin?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: '`Airport`.' })
+  @IsOptional()
+  @IsObject()
+  destination?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: '`FlightTime`.' })
+  @IsOptional()
+  @IsObject()
+  time?: { departure?: string | null; arrival?: string | null; duration?: number };
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  stops?: number;
+
+  @ApiPropertyOptional({ description: 'Os segmentos, como vieram da busca.', type: 'array' })
+  @IsOptional()
+  @IsArray()
+  flights?: unknown[];
+
+  @ApiPropertyOptional({ type: 'array' })
+  @IsOptional()
+  @IsArray()
+  fees?: unknown[];
+}
+
+export class BookingSegmentsDto {
+  @ApiPropertyOptional({ type: [BookingLegDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => BookingLegDto)
+  departure?: BookingLegDto[];
+
+  @ApiPropertyOptional({ type: [BookingLegDto], description: 'Ausente ou vazio em `oneway`.' })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => BookingLegDto)
+  return?: BookingLegDto[];
+}
+
+export class BookingItineraryDto {
+  @ApiProperty({ type: [BookingLegDto], description: 'Um item por trecho, na ordem. A posição é o trecho.' })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => BookingLegDto)
+  legs!: BookingLegDto[];
+
+  @ApiPropertyOptional({ description: 'Alternativa à raiz para a tarifa de pacote no multidestino.', type: 'array' })
+  @IsOptional()
+  @IsArray()
+  @IsObject({ each: true })
+  fares?: Array<Record<string, unknown>>;
+}
+
+export class BookingRequestOptionsDto {
+  @ApiPropertyOptional({ enum: ['BRL', 'USD', 'EUR'] })
+  @IsOptional()
+  @IsIn(['BRL', 'USD', 'EUR'])
+  currency?: string;
+
+  @ApiPropertyOptional({ enum: ['pt-br', 'en-us', 'es-es'] })
+  @IsOptional()
+  @IsIn(['pt-br', 'en-us', 'es-es'])
+  language?: string;
 
   @ApiPropertyOptional({
-    description: 'Parâmetros do nível da RESERVA (PerPassenger=false).',
+    description: 'Extensão declarada: parâmetros do nível da RESERVA exigidos no /quote (perPassenger=false).',
     example: { LuggageOptions: '1' },
   })
   @IsOptional()
@@ -274,20 +519,21 @@ export class BookingFieldsDto {
 }
 
 /**
- * Reservar.
+ * Reservar — 06-booking.md.
  *
- * O modelo canônico descreve esta rota como queue-owned e embrulha a seleção em
- * `service.flight[]` — a forma que o worker recebe, com os campos de venda que
- * o próprio modelo diz não pertencerem ao provider. Aqui a API é direta: o que
- * sobrevive é `customer`, `people` e `fields.selectedFareId`, que é exatamente
- * o recorte que o mapper da companhia consome.
+ * Os trechos e a tarifa vêm da busca, copiados como vieram. Quem decide a venda
+ * é o `fareId` da tarifa escolhida (`selectedFareId`, ou o de `fares[]`): é a
+ * chave opaca que abre a oferta na companhia.
  */
 export class CreateBookingDto {
-  @ApiPropertyOptional({ type: ProviderOptionsDto })
+  @ApiPropertyOptional({ example: 'latam', description: 'A companhia desta reserva. A chave da tarifa confirma.' })
   @IsOptional()
-  @ValidateNested()
-  @Type(() => ProviderOptionsDto)
-  options?: ProviderOptionsDto;
+  @IsString()
+  provider?: string;
+
+  @ApiProperty({ enum: ['oneway', 'roundtrip', 'multicity'], description: 'Define qual validação se aplica.' })
+  @IsIn(['oneway', 'roundtrip', 'multicity'])
+  trip!: TripType;
 
   @ApiProperty({ type: CustomerDto })
   @IsDefined()
@@ -295,19 +541,56 @@ export class CreateBookingDto {
   @Type(() => CustomerDto)
   customer!: CustomerDto;
 
-  @ApiProperty({
-    description: 'Mapa PaxID → passageiro. As chaves são ADT_1, CHD_1, INF_1…',
-    example: { ADT_1: { firstName: 'ANA', lastName: 'EXAMPLE', ageGroup: 'adult', birthDate: '1990-01-01' } },
-  })
-  @IsDefined()
-  @IsObject()
-  people!: Record<string, BookingPersonDto>;
+  @ApiProperty({ type: [BookingPersonDto] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => BookingPersonDto)
+  people!: BookingPersonDto[];
 
-  @ApiProperty({ type: BookingFieldsDto })
-  @IsDefined()
+  @ApiPropertyOptional({ type: BookingSegmentsDto, description: 'Obrigatório em `oneway`/`roundtrip`.' })
+  @IsOptional()
   @ValidateNested()
-  @Type(() => BookingFieldsDto)
-  fields!: BookingFieldsDto;
+  @Type(() => BookingSegmentsDto)
+  segments?: BookingSegmentsDto;
+
+  @ApiPropertyOptional({ type: BookingItineraryDto, description: 'Obrigatório em `multicity`.' })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => BookingItineraryDto)
+  itinerary?: BookingItineraryDto;
+
+  @ApiPropertyOptional({ description: 'A tarifa escolhida, na RAIZ (pacote). Posicional — 06-booking.md §3.', type: 'array' })
+  @IsOptional()
+  @IsArray()
+  @IsObject({ each: true })
+  fares?: Array<Record<string, unknown>>;
+
+  @ApiPropertyOptional({ description: 'Qual tarifa de `fares[]` foi escolhida. Tem que existir na lista.' })
+  @IsOptional()
+  @IsString()
+  selectedFareId?: string;
+
+  @ApiPropertyOptional({ example: 625.0, description: 'O total exibido ao cliente. Âncora do gate de re-tarifa.' })
+  @IsOptional()
+  @IsNumber()
+  displayedTotal?: number;
+
+  @ApiPropertyOptional({ description: 'Extras a pendurar junto com a reserva.', type: 'array' })
+  @IsOptional()
+  @IsArray()
+  ancillaries?: unknown[];
+
+  @ApiPropertyOptional({ description: 'Pagamento, quando a companhia o exige já na criação.' })
+  @IsOptional()
+  @IsObject()
+  payment?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ type: BookingRequestOptionsDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => BookingRequestOptionsDto)
+  options?: BookingRequestOptionsDto;
 }
 
 // ── Consultar ─────────────────────────────────────────────────────────────────
@@ -384,46 +667,92 @@ export class CancelBookingDto {
   cancel!: CancelBlockDto;
 }
 
-// ── Assentos e opcionais da OFERTA ────────────────────────────────────────────
+// ── Mapa de assentos e opcionais ──────────────────────────────────────────────
 
-/**
- * 🔴 DIVERGÊNCIA CONSCIENTE, e é a única do dialeto.
- *
- * O modelo endereça `/seat-map` e `/ancillaries` pelo LOCALIZADOR, assumindo que
- * a escolha é pós-reserva. Na LATAM o `/seats/availability` e o `/services/list`
- * respondem pela OFERTA — a escolha é anterior, e o localizador ainda não
- * existe. Endereçar por `fareId` é o que torna a operação utilizável; inventar
- * um localizador para caber no formato seria pior.
- *
- * O caso do modelo continua atendido: é o `/order-seat-map` e o
- * `/order-ancillaries`, que respondem pela reserva já emitida.
- */
-export class OfferCatalogDto {
-  @ApiPropertyOptional({ type: ProviderOptionsDto })
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => ProviderOptionsDto)
-  options?: ProviderOptionsDto;
-
-  @ApiProperty({ description: 'A chave opaca vinda de `fares[].fareId`.' })
-  @IsString()
-  fareId!: string;
-
-  // 👇 ADICIONE O JOURNEY KEY AQUI 👇
-  @ApiPropertyOptional({ description: 'O identificador do trecho (necessário na LATAM para mapas pré-reserva).' })
+/** Opções da chamada de catálogo. `currency` é preferência da CHAMADA, não da reserva. */
+export class CatalogOptionsDto extends ProviderOptionsDto {
+  @ApiPropertyOptional({ example: 'BRL', description: 'Moeda desejada dos preços. Padrão BRL.' })
   @IsOptional()
   @IsString()
-  journeyKey?: string;
+  currency?: string;
 }
 
-export class AncillariesBlockDto {
-  @ApiProperty({ description: 'A chave opaca vinda de `fares[].fareId`.' })
+/** Filtro por id — `[{id}]` do 09-assentos.md §1.1. */
+export class IdRefDto {
+  @ApiProperty({ example: 'SEG_1' })
   @IsString()
-  fareId!: string;
+  id!: string;
+}
 
-  @ApiPropertyOptional({ example: 'baggage', description: 'Ausente = todos os extras.' })
+/**
+ * O endereço de um catálogo: a RESERVA (`booking`, o contrato) ou a OFERTA
+ * (`fareId`, extensão declarada).
+ *
+ * 🔴 Por que a extensão existe: na LATAM o mapa e os opcionais também respondem
+ * pela oferta, ANTES de o localizador existir — é onde a escolha costuma
+ * acontecer. Mas os ids desse catálogo morrem na emissão: só os do catálogo da
+ * reserva servem para comprar depois dela.
+ */
+export class SeatMapBlockDto {
+  @ApiPropertyOptional({ type: BookingAddressDto, description: 'O endereço da reserva. `locator` basta na LATAM.' })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => BookingAddressDto)
+  booking?: BookingAddressDto;
+
+  @ApiPropertyOptional({ description: 'Extensão declarada: o mapa da OFERTA, antes de reservar. A chave `fares[].fareId` da busca.' })
   @IsOptional()
   @IsString()
+  fareId?: string;
+
+  @ApiPropertyOptional({ type: [IdRefDto], description: 'Filtro de trecho. Ausente = todos.' })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => IdRefDto)
+  segments?: IdRefDto[];
+
+  @ApiPropertyOptional({ type: [IdRefDto], description: 'Filtro de passageiro. Ausente = todos.' })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => IdRefDto)
+  passengers?: IdRefDto[];
+}
+
+export class SeatMapDto {
+  @ApiPropertyOptional({ type: CatalogOptionsDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CatalogOptionsDto)
+  options?: CatalogOptionsDto;
+
+  @ApiProperty({ type: SeatMapBlockDto })
+  @IsDefined()
+  @ValidateNested()
+  @Type(() => SeatMapBlockDto)
+  seatMap!: SeatMapBlockDto;
+}
+
+export const ANCILLARY_TYPES = [
+  'baggage', 'seat', 'meal', 'pet-cabin', 'pet-hold', 'unaccompanied-minor', 'vip-lounge', 'upgrade', 'other',
+];
+
+export class AncillariesBlockDto {
+  @ApiPropertyOptional({ type: BookingAddressDto, description: 'O endereço da reserva.' })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => BookingAddressDto)
+  booking?: BookingAddressDto;
+
+  @ApiPropertyOptional({ description: 'Extensão declarada: o catálogo da OFERTA, antes de reservar.' })
+  @IsOptional()
+  @IsString()
+  fareId?: string;
+
+  @ApiPropertyOptional({ enum: ANCILLARY_TYPES, description: 'Filtro ESTRITO: oferta sem tipo declarado sai. Ausente = tudo.' })
+  @IsOptional()
+  @IsIn(ANCILLARY_TYPES)
   type?: string;
 
   @ApiPropertyOptional({ type: [String], example: ['ADT_1'], description: 'Ausente = todos os passageiros.' })
@@ -440,11 +769,11 @@ export class AncillariesBlockDto {
 }
 
 export class AncillariesDto {
-  @ApiPropertyOptional({ type: ProviderOptionsDto })
+  @ApiPropertyOptional({ type: CatalogOptionsDto })
   @IsOptional()
   @ValidateNested()
-  @Type(() => ProviderOptionsDto)
-  options?: ProviderOptionsDto;
+  @Type(() => CatalogOptionsDto)
+  options?: CatalogOptionsDto;
 
   @ApiProperty({ type: AncillariesBlockDto })
   @IsDefined()
@@ -453,34 +782,47 @@ export class AncillariesDto {
   ancillaries!: AncillariesBlockDto;
 }
 
-/** Catálogo da RESERVA emitida — endereçado pelo localizador, como no modelo. */
-export class OrderCatalogDto {
-  @ApiPropertyOptional({ type: ProviderOptionsDto })
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => ProviderOptionsDto)
-  options?: ProviderOptionsDto;
-
-  @ApiProperty({ type: BookingAddressDto })
-  @IsDefined()
-  @ValidateNested()
-  @Type(() => BookingAddressDto)
-  booking!: BookingAddressDto;
-}
-
 // ── Pagamento ─────────────────────────────────────────────────────────────────
+
+/** Endereço de cobrança do cartão — `creditCard.billingAddress` do 11-emissao.md §3.2. */
+export class BillingAddressDto {
+  @ApiPropertyOptional({ example: '01310-100' })
+  @IsOptional()
+  @IsString()
+  zipCode?: string;
+
+  @ApiPropertyOptional({ example: 'Av. Paulista, 1000' })
+  @IsOptional()
+  @IsString()
+  street?: string;
+
+  @ApiPropertyOptional({ example: 'São Paulo' })
+  @IsOptional()
+  @IsString()
+  city?: string;
+
+  @ApiPropertyOptional({ example: 'SP' })
+  @IsOptional()
+  @IsString()
+  state?: string;
+
+  @ApiPropertyOptional({ example: 'BR' })
+  @IsOptional()
+  @IsString()
+  country?: string;
+}
 
 /**
  * 🔴 DADO DE CARTÃO. Não é logado, não é guardado e não volta na resposta.
  *
- * O vocabulário é o do modelo: `cvv` e `expiryDate`, não `securityCode` e
- * `expiration`. `expiryDate` é `MM/YYYY` — a conversão para o que a companhia
- * espera é nossa, em `common/utils/card.ts`.
+ * O vocabulário é o do contrato — 11-emissao.md §3.2. `expiryDate` é `MM/YYYY`;
+ * a conversão para o que a companhia espera é nossa, em `common/utils/card.ts`.
  */
 export class CreditCardDto {
-  @ApiProperty({ example: 'VI', description: 'Código IATA da bandeira: VI, CA, AX…' })
-  @IsString()
-  brand!: string;
+  @ApiProperty({ example: 'VI', description: 'Bandeira: sigla IATA (VI, CA, AX…) ou código numérico, como vier do /payment-options.' })
+  @IsDefined()
+  @IsNotEmpty()
+  brand!: string | number;
 
   @ApiProperty({ example: 'ANA EXAMPLE' })
   @IsString()
@@ -496,12 +838,27 @@ export class CreditCardDto {
   @Matches(/^\d{3,4}$/, { message: 'cvv deve ter 3 ou 4 dígitos' })
   cvv!: string;
 
-  @ApiProperty({ example: '12/2030', description: 'MM/YYYY ou MM/YY.' })
+  @ApiProperty({ example: '12/2030', description: 'MM/AAAA.' })
   @IsString()
-  @Matches(/^\d{2}\/?\d{2}(\d{2})?$/, { message: 'expiryDate deve ser MM/YYYY ou MM/YY' })
+  @Matches(/^\d{2}\/?\d{2}(\d{2})?$/, { message: 'expiryDate deve ser MM/AAAA' })
   expiryDate!: string;
 
-  @ApiPropertyOptional({ example: 'buyer@example.test', description: 'Contato do PAGADOR.' })
+  @ApiPropertyOptional({ example: 1 })
+  @IsOptional()
+  @IsInt()
+  installments?: number;
+
+  @ApiPropertyOptional({ description: 'O `plans[].financingId` do /financing-options.' })
+  @IsOptional()
+  @Allow()
+  financingId?: string | number;
+
+  @ApiPropertyOptional({ example: '52998224725', description: 'CPF do titular. A LATAM exige no Payer.' })
+  @IsOptional()
+  @IsString()
+  holderCpf?: string;
+
+  @ApiPropertyOptional({ example: 'buyer@example.test' })
   @IsOptional()
   @IsString()
   holderEmail?: string;
@@ -511,84 +868,45 @@ export class CreditCardDto {
   @IsString()
   holderPhone?: string;
 
-  @ApiPropertyOptional({ example: '1990-01-01', description: 'Exigido quando o retrieve não traz a data do pagador.' })
+  @ApiPropertyOptional({ example: '1990-01-01', description: 'A LATAM exige no Payer.' })
   @IsOptional()
   @IsString()
-  @Matches(DATE, { message: 'holderBirthDate deve ser YYYY-MM-DD' })
-  holderBirthDate?: string;
+  @Matches(DATE, { message: 'holderBirthdate deve ser YYYY-MM-DD' })
+  holderBirthdate?: string;
 
-  @ApiPropertyOptional({ example: '52998224725', description: 'CPF do titular, no Brasil. A LATAM exige no Payer.' })
+  @ApiPropertyOptional({ type: BillingAddressDto, description: 'Endereço de cobrança. A LATAM exige.' })
   @IsOptional()
-  @IsString()
-  holderDocument?: string;
-}
-
-/**
- * Endereço de cobrança.
- *
- * Não está no modelo porque o executor LATAM documentado ali não o lê — mas o
- * `/order/change/payment` real exige `ContactInfo` com `ContactPurposeText:
- * BILLING` e `PostalAddress` completo. É extensão declarada, não invenção.
- */
-export class BillingAddressDto {
-  @ApiProperty({ example: 'buyer@example.test' })
-  @IsString()
-  email!: string;
-
-  @ApiProperty({ example: 'BR' })
-  @IsString()
-  countryCode!: string;
-
-  @ApiProperty({ example: '01310-100' })
-  @IsString()
-  postalCode!: string;
-
-  @ApiProperty({ example: 'Av. Paulista, 1000' })
-  @IsString()
-  street!: string;
+  @ValidateNested()
+  @Type(() => BillingAddressDto)
+  billingAddress?: BillingAddressDto;
 }
 
 export class IssuePaymentDto {
-  @ApiPropertyOptional({ example: 'credit-card', enum: ['credit-card', 'cash'] })
+  @ApiPropertyOptional({ example: 'credit-card', description: 'O `method.code` do /payment-options.' })
   @IsOptional()
-  @IsIn(['credit-card', 'cash'])
-  paymentMethod?: string;
+  @Allow()
+  paymentMethod?: string | number;
 
-  @ApiPropertyOptional({ example: 'single' })
+  @ApiPropertyOptional({ description: 'O `method.typeCode`.' })
   @IsOptional()
-  @IsString()
-  paymentMethodType?: string;
+  @Allow()
+  paymentMethodType?: string | number;
 
   /**
    * 🔴 Ausente = a API PERGUNTA o total à companhia antes de cobrar, em vez de
-   * confiar num número que veio do cliente. Um valor divergente aqui é a forma
-   * mais fácil de cobrar errado — e quando diverge, a cobrança não acontece.
+   * confiar num número que veio do cliente. Divergir do saldo vivo é 409, e a
+   * cobrança não acontece.
    */
-  @ApiPropertyOptional({ example: 505.0, description: 'Declaração do que quem chama espera pagar.' })
+  @ApiPropertyOptional({ example: 505.0, description: 'Valor a cobrar. Âncora: divergir do saldo → 409.' })
   @IsOptional()
+  @IsNumber()
   billedAmount?: number;
-
-  @ApiPropertyOptional({ example: 'BRL' })
-  @IsOptional()
-  @IsString()
-  currency?: string;
 
   @ApiProperty({ type: CreditCardDto })
   @IsDefined()
   @ValidateNested()
   @Type(() => CreditCardDto)
   creditCard!: CreditCardDto;
-
-  @ApiProperty({ type: BillingAddressDto })
-  @IsDefined()
-  @ValidateNested()
-  @Type(() => BillingAddressDto)
-  billing!: BillingAddressDto;
-
-  @ApiPropertyOptional({ description: 'Id da parcela escolhida em /financing-options.' })
-  @IsOptional()
-  @IsString()
-  installmentId?: string;
 }
 
 export class IssueBlockDto {
@@ -598,7 +916,7 @@ export class IssueBlockDto {
   @Type(() => BookingAddressDto)
   booking!: BookingAddressDto;
 
-  @ApiPropertyOptional({ description: 'Se true, aceita a re-tarifa depois de FARE_PRICE_CHANGED.' })
+  @ApiPropertyOptional({ description: 'Confirma a emissão mesmo com o preço alterado. Padrão false.' })
   @IsOptional()
   @IsBoolean()
   acceptFareChange?: boolean;
@@ -624,15 +942,35 @@ export class IssueDto {
   issue!: IssueBlockDto;
 }
 
-/** Só o PAN: a operadora precisa dele para calcular as parcelas. */
+/** O cartão do /financing-options: a operadora cota pelo número. */
 export class FinancingCardDto {
+  @ApiPropertyOptional({ description: 'Bandeira, quando a companhia pede.' })
+  @IsOptional()
+  @Allow()
+  brand?: string | number;
+
   @ApiProperty({ example: '4000000000002701', description: 'Número do cartão. Não é logado nem guardado.' })
   @IsString()
-  @Matches(/^\d{13,19}$/, { message: 'number deve ter de 13 a 19 dígitos' })
+  @Matches(/^\d{6,19}$/, { message: 'number deve ter de 6 a 19 dígitos' })
   number!: string;
+
+  @ApiPropertyOptional({ example: '12/2030' })
+  @IsOptional()
+  @IsString()
+  expiryDate?: string;
 }
 
 export class FinancingPaymentDto {
+  @ApiPropertyOptional({ description: 'O `method.code` do /payment-options.' })
+  @IsOptional()
+  @Allow()
+  paymentMethod?: string | number;
+
+  @ApiPropertyOptional({ description: 'O `method.typeCode`.' })
+  @IsOptional()
+  @Allow()
+  paymentMethodType?: string | number;
+
   @ApiProperty({ type: FinancingCardDto })
   @IsDefined()
   @ValidateNested()
@@ -640,13 +978,7 @@ export class FinancingPaymentDto {
   creditCard!: FinancingCardDto;
 }
 
-export class FinancingOptionsDto {
-  @ApiPropertyOptional({ type: ProviderOptionsDto })
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => ProviderOptionsDto)
-  options?: ProviderOptionsDto;
-
+export class FinancingBlockDto {
   @ApiProperty({ type: BookingAddressDto })
   @IsDefined()
   @ValidateNested()
@@ -659,10 +991,29 @@ export class FinancingOptionsDto {
   @Type(() => FinancingPaymentDto)
   payment!: FinancingPaymentDto;
 
-  @ApiPropertyOptional({ example: 'PAYLATER', description: 'Fluxo aceito pelo builder; o padrão é PAYLATER.' })
+  @ApiPropertyOptional({ description: 'Valor a parcelar, quando a companhia não o infere da reserva.' })
+  @IsOptional()
+  @IsNumber()
+  totalAmount?: number;
+
+  @ApiPropertyOptional({ description: 'Para companhias que cotam pela tarifa da busca. A LATAM cota pela reserva.' })
   @IsOptional()
   @IsString()
-  executionFlow?: string;
+  rateTokens?: string;
+}
+
+export class FinancingOptionsDto {
+  @ApiPropertyOptional({ type: CatalogOptionsDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CatalogOptionsDto)
+  options?: CatalogOptionsDto;
+
+  @ApiProperty({ type: FinancingBlockDto })
+  @IsDefined()
+  @ValidateNested()
+  @Type(() => FinancingBlockDto)
+  financingOptions!: FinancingBlockDto;
 }
 
 export class PaymentOptionsBlockDto {
@@ -679,6 +1030,12 @@ export class PaymentOptionsBlockDto {
 }
 
 export class PaymentOptionsDto {
+  @ApiPropertyOptional({ type: ProviderOptionsDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ProviderOptionsDto)
+  options?: ProviderOptionsDto;
+
   @ApiProperty({ type: PaymentOptionsBlockDto })
   @IsDefined()
   @ValidateNested()
@@ -799,10 +1156,10 @@ export class MarkSeatsOptionsDto {
 }
 
 export class MarkSeatsPaymentDto {
-  @ApiPropertyOptional({ enum: ['credit-card'], description: 'Ausência significa assento pendente.' })
+  @ApiPropertyOptional({ example: 'credit-card', description: 'Forma de pagamento: `string` ou `number`, como o /payment-options a nomeia.' })
   @IsOptional()
-  @IsIn(['credit-card'])
-  method?: string;
+  @Allow()
+  method?: string | number;
 
   @ApiPropertyOptional({ example: 79.0, description: 'Valor publicado pelo mapa; nunca markup da aplicação.' })
   @IsOptional()

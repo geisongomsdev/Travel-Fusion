@@ -255,13 +255,12 @@ Travelfusion, e o `/cancel-booking` respondia 501 mesmo com a LATAM, que cancela
 | `/booking` | ✅ OrderCreate | ✅ ProcessTerms + StartBooking |
 | `/retrieve` | ✅ OrderRetrieve | ✅ CheckBooking |
 | `/cancel-booking` | ✅ OrderReshop + OrderCancel/**Void** | 501 — `StartBooking` já cobra, cancelar seria estorno |
-| `/seat-map` | ✅ SeatAvailability, **pela oferta** | 501 — depende do fornecedor por trás do agregador |
-| `/ancillaries` | ✅ ServiceList, **pela oferta** | 501 — saem no `/quote`, em `requiredParameters` |
+| `/seat-map` | ✅ SeatAvailability, **pela reserva** (contrato) ou pela oferta (extensão) | 501 — depende do fornecedor por trás do agregador |
+| `/ancillaries` | ✅ ServiceList, **pela reserva** (contrato) ou pela oferta (extensão) | 501 — saem no `/quote`, em `requiredParameters` |
 | `/fare-rules` | 501 — devolve penalidade estruturada, não o texto da tarifa | ✅ vem no ProcessDetails |
 | `/ping` | ✅ o próprio OAuth2 prova a credencial | ✅ Login |
 | `/financing-options` | ✅ InstallmentOptions | 501 — não expõe parcelamento |
 | `/issue` | ✅ OrderChange com pagamento | 501 — `StartBooking` já cobra |
-| `/order-seat-map`, `/order-ancillaries` | ✅ os mesmos catálogos, **pela reserva** | 501 |
 | `/sell-ancillaries`, `/mark-seats` | ✅ OrderChange 24.1 (ver abaixo) | 501 — o extra entra como CSP no `/booking` |
 | e-ticket, `payment-options` | 501 | 501 |
 
@@ -285,8 +284,8 @@ que fecha a passagem. Por isso `/booking` e `/issue` são rotas distintas, e nã
 |---|---|---|
 | `/financing-options` | `InstallmentOptions` (v192) | ✅ até 8x sem juros, verificado |
 | `/issue` | `OrderChange` com pagamento (v192) | ✅ ordem vai de `OPENED` a `CLOSED`, verificado |
-| `/order-seat-map` | `SeatAvailability` **pela ordem** | ✅ 279 assentos com `SEAT_…`, verificado |
-| `/order-ancillaries` | `ServiceList` **pela ordem** | ✅ 5 bagagens com `BAG_…`, verificado |
+| `/seat-map` com `booking` | `SeatAvailability` **pela ordem** | ✅ 279 assentos com `SEAT_…`, verificado |
+| `/ancillaries` com `booking` | `ServiceList` **pela ordem** | ✅ 5 bagagens com `BAG_…`, verificado |
 | `/sell-ancillaries`, `/mark-seats` | `OrderChange` 24.1 | ⚠️ payload aceito; o sandbox recusa a cobrança |
 
 🔴 **O valor a cobrar não vem do corpo.** O `/issue` pergunta o total à companhia pelo `OrderRetrieve`
@@ -346,8 +345,8 @@ O mesmo assento tem **dois identificadores**, conforme por onde se pergunta:
 
 | Endereçado por | Rota | `offerItemId` | Serve para |
 |---|---|---|---|
-| Oferta (antes de reservar) | `/seat-map`, `/ancillaries` | `SEI\|…` | escolher; morre na emissão |
-| Ordem (depois de emitida) | `/order-seat-map`, `/order-ancillaries` | `SEAT_…` / `BAG_…` | **comprar** |
+| Oferta (antes de reservar) | `/seat-map`, `/ancillaries` com `fareId` | `SEI\|…` | escolher; morre na emissão |
+| Ordem (depois de emitida) | `/seat-map`, `/ancillaries` com `booking` | `SEAT_…` / `BAG_…` | **comprar** |
 
 Trocar um pelo outro é o que fazia a LATAM responder `INVALID_OFFER_TYPES: Mixed type offers are not
 supported`. O prefixo (`SEAT_`/`BAG_`) é o que roteia o pedido para o fluxo de opcionais; um id fora
