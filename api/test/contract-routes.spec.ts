@@ -13,8 +13,11 @@ import { RetrieveService } from '../src/modules/flight/use-cases/retrieve.servic
 import { SellAncillariesService } from '../src/modules/flight/use-cases/sell-ancillaries.service';
 import { ProviderRegistry } from '../src/modules/providers/provider.registry';
 import {
-  BookingInput, FlightProvider, ProviderRetrieval, ProviderSeatMap,
+  BookingInput, BookingPersonInput, FlightProvider, ProviderRetrieval, ProviderSeatMap,
 } from '../src/modules/providers/provider.types';
+import { LatamClient } from '../src/modules/providers/latam/latam.client';
+import { LatamCommands } from '../src/modules/providers/latam/latam.commands';
+import { LatamProvider } from '../src/modules/providers/latam/latam.provider';
 
 /**
  * Os FORMATOS do contrato da Pass (`docs-api/`), rota por rota, com um provedor
@@ -540,5 +543,63 @@ describe('o corpo sobrevive ao ValidationPipe do main.ts', () => {
 
   it('/quote sem o bloco quote é 400', async () => {
     await expect(through(QuoteDto, { type: 'oneway', offers: [{ fareId: FARE_ID }] })).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+/**
+ * 🔴 O que chega à COMPANHIA com mais de um passageiro. O duble do NDC devolve uma ordem
+ * fixa e não confere a lista, então o 201 dele não prova nada sobre o XML — aqui o cliente
+ * é falso e o que se inspeciona é a mensagem montada.
+ */
+describe('OrderCreate com vários passageiros', () => {
+  const xmlFor = async (people: BookingPersonInput[]): Promise<string> => {
+    const sent: string[] = [];
+    const client = {
+      send: async (_operation: string, _path: string, body: string) => {
+        sent.push(body);
+        return { parsed: {}, payload: { Order: { OrderID: 'ORD-1', StatusCode: 'OPENED' } }, durationMs: 1 };
+      },
+    } as unknown as LatamClient;
+
+    const provider = new LatamProvider(new LatamCommands(client));
+    await provider.book(
+      { p: 'latam', r: 'OFFER-1', i: 'ITEM-1', x: people.map((person) => person.id) },
+      { customer: { email: 'andy@example.com', phone: '11999999999' }, people, referenceDate: '2026-10-12' },
+      {},
+    );
+    return sent[0];
+  };
+
+  const traveller = (id: string, ageGroup: BookingPersonInput['ageGroup'], firstName: string): BookingPersonInput => ({
+    id, firstName, lastName: 'Peterson', ageGroup, birthDate: '1990-04-21',
+  });
+
+  it('manda um Pax por viajante, com o PaxID e o PTC de cada um', async () => {
+    const xml = await xmlFor([
+      traveller('ADT_1', 'adult', 'Andy'),
+      traveller('ADT_2', 'adult', 'Ana'),
+      traveller('CHD_1', 'child', 'Beto'),
+    ]);
+
+    expect(xml.match(/<PaxID>[^<]+<\/PaxID>/g)).toEqual([
+      '<PaxID>ADT_1</PaxID>', '<PaxID>ADT_2</PaxID>', '<PaxID>CHD_1</PaxID>',
+    ]);
+    expect(xml.match(/<PTC>[^<]+<\/PTC>/g)).toEqual(['<PTC>ADT</PTC>', '<PTC>ADT</PTC>', '<PTC>CHD</PTC>']);
+    expect(xml).toContain('<GivenName>Beto</GivenName>');
+  });
+
+  /**
+   * 🔴 Um `ContactInfo` por PaxID, cada Pax apontando para o SEU. Sem o par completo a LATAM
+   * responde `912 ContactInfoList is null or empty` ou `cvc-identity-constraint.4.3`.
+   */
+  it('cada passageiro ganha o seu ContactInfo, e a referência existe', async () => {
+    const xml = await xmlFor([traveller('ADT_1', 'adult', 'Andy'), traveller('CHD_1', 'child', 'Beto')]);
+
+    expect(xml.match(/<ContactInfoID>[^<]+<\/ContactInfoID>/g)).toEqual([
+      '<ContactInfoID>ADT_1_CNT</ContactInfoID>', '<ContactInfoID>CHD_1_CNT</ContactInfoID>',
+    ]);
+    expect(xml.match(/<ContactInfoRefID>[^<]+<\/ContactInfoRefID>/g)).toEqual([
+      '<ContactInfoRefID>ADT_1_CNT</ContactInfoRefID>', '<ContactInfoRefID>CHD_1_CNT</ContactInfoRefID>',
+    ]);
   });
 });
