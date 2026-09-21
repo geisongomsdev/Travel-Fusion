@@ -430,6 +430,7 @@ export default function App() {
         )}
         {step === 3 && (
           <BookingStep
+            passengers={criteria?.passengers}
             onBook={handleBook}
             running={running}
             booking={booking}

@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ArrowRight, Search, Users, Cable, Route, Armchair, Loader2, Plus, X } from 'lucide-react';
+import { ArrowLeftRight, ArrowRight, Search, Users, Baby, Cable, Route, Armchair, Loader2, Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AirportCombobox } from '@/components/ui/airport-combobox';
 import { DatePicker } from '@/components/ui/date-picker';
@@ -43,6 +43,10 @@ const CABINS = [
 ];
 
 const PASSENGERS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+// Criança tem assento próprio; bebê de colo, não. A companhia cobra e valida os dois pela
+// idade NA DATA DO VOO, e por isso eles entram na busca — a tarifa muda.
+const CHILDREN = [0, 1, 2, 3, 4];
+const INFANTS = [0, 1, 2];
 
 /** Gatilho de select no desenho de chip da barra. */
 const chipTrigger = cn(
@@ -143,6 +147,34 @@ export function SearchToolbar({ form, onChange, onSwap, onSubmit, running }) {
             {PASSENGERS.map((count) => (
               <SelectItem key={count} value={String(count)}>
                 {count} {count === 1 ? 'adulto' : 'adultos'}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={String(form.children ?? 0)} onValueChange={(value) => onChange('children', Number(value))}>
+          <SelectTrigger className={chipTrigger} aria-label="Crianças">
+            <Users strokeWidth={TOOLBAR_ICON_STROKE_WIDTH} />
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {CHILDREN.map((count) => (
+              <SelectItem key={count} value={String(count)}>
+                {count} {count === 1 ? 'criança' : 'crianças'}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={String(form.infants ?? 0)} onValueChange={(value) => onChange('infants', Number(value))}>
+          <SelectTrigger className={chipTrigger} aria-label="Bebês de colo">
+            <Baby strokeWidth={TOOLBAR_ICON_STROKE_WIDTH} />
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {INFANTS.map((count) => (
+              <SelectItem key={count} value={String(count)}>
+                {count} {count === 1 ? 'bebê de colo' : 'bebês de colo'}
               </SelectItem>
             ))}
           </SelectContent>

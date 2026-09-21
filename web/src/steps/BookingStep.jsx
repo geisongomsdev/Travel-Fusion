@@ -4,33 +4,55 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { formatMoney, formatTime } from '@/lib/utils';
+import { cn, formatMoney, formatTime } from '@/lib/utils';
+
+/**
+ * Os viajantes que a oferta espera, na MESMA ordem em que ela foi tarifada:
+ * `ADT_1…`, depois `CHD_1…`, depois `INF_1…`.
+ *
+ * 🔴 O `identifier` não é numeração da tela: é o PaxID com que a companhia tarifou a
+ * oferta. A API recusa a reserva que não traz todos eles, e recusa um id que não esteja na
+ * oferta — reservar com menos gente pagaria um preço que cobre mais.
+ */
+function travellersOf({ adults = 1, children = 0, infants = 0 } = {}) {
+  const build = (prefix, count, ageGroup, label) =>
+    Array.from({ length: count }, (_, index) => ({
+      identifier: `${prefix}_${index + 1}`,
+      ageGroup,
+      label: count > 1 ? `${label} ${index + 1}` : label,
+      firstName: '',
+      lastName: '',
+      birthdate: '',
+      documentNumber: '',
+    }));
+
+  return [
+    ...build('ADT', Math.max(1, adults), 'adult', 'Adulto'),
+    ...build('CHD', children, 'child', 'Criança'),
+    ...build('INF', infants, 'infant', 'Bebê de colo'),
+  ];
+}
 
 /**
  * 🔴 Os campos aqui não são escolha de tela: são os `requiredParameters` que o
- * `/quote` declarou. O documento vai por passageiro; e-mail e telefone são da
- * reserva, e a companhia recusa a ordem sem eles.
+ * `/quote` declarou. Nome, nascimento e documento vão POR PASSAGEIRO; e-mail e
+ * telefone são da reserva, e a companhia recusa a ordem sem eles.
  *
  * O que NÃO aparece: nome de mensagem NDC, URL de endpoint e aviso de
  * idempotência. Isso é verdade da integração — vive no README e no código, não
  * na frente de quem está comprando.
  */
-export function BookingStep({ onBook, running, booking, retrieved, cancellation, onRetrieve, onPay }) {
-  const [passenger, setPassenger] = useState({
-    title: 'Mr',
-    firstName: 'Andy',
-    lastName: 'Peterson',
-    birthdate: '1990-04-21',
-    documentNumber: 'AAB0302',
-  });
+export function BookingStep({ onBook, running, booking, retrieved, cancellation, onRetrieve, onPay, passengers }) {
+  const [travellers, setTravellers] = useState(() => travellersOf(passengers));
 
   const [contact, setContact] = useState({
     email: 'andy@example.com',
     phone: '11999999999',
   });
 
-  const updatePassenger = (key) => (event) =>
-    setPassenger((prev) => ({ ...prev, [key]: event.target.value }));
+  const updateTraveller = (index, key) => (event) => setTravellers((prev) => prev.map((traveller, position) => (
+    position === index ? { ...traveller, [key]: event.target.value } : traveller
+  )));
 
   const updateContact = (key) => (event) =>
     setContact((prev) => ({ ...prev, [key]: event.target.value }));
@@ -50,23 +72,14 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
 
   const submit = (event) => {
     event.preventDefault();
-    const { documentNumber, ...individual } = passenger;
 
-    /**
-     * 🔴 `identifier` é o PaxID. A oferta foi tarifada para uma composição
-     * específica, e é ele que amarra tarifa, assento e bilhete ao passageiro
-     * certo.
-     */
     onBook(
-      [
-        {
-          identifier: 'ADT_1',
-          main: true,
-          ...individual,
-          ageGroup: 'adult',
-          document: { type: 'PASSPORT', number: documentNumber },
-        },
-      ],
+      travellers.map(({ label, documentNumber, ...traveller }) => ({
+        ...traveller,
+        main: traveller.identifier === 'ADT_1',
+        ...(traveller.ageGroup === 'adult' ? { title: 'Mr' } : {}),
+        ...(documentNumber ? { document: { type: 'PASSPORT', number: documentNumber } } : {}),
+      })),
       {
         email: contact.email,
         ...(contact.phone ? { phone: { number: contact.phone } } : {}),
@@ -74,51 +87,70 @@ export function BookingStep({ onBook, running, booking, retrieved, cancellation,
     );
   };
 
-  const incomplete = !contact.email && !contact.phone;
+  // A companhia recusa a ordem sem contato, e sem nome e nascimento de cada viajante.
+  const incomplete = (!contact.email && !contact.phone)
+    || travellers.some((traveller) => !traveller.firstName || !traveller.lastName || !traveller.birthdate);
 
   return (
     <div className="mx-auto max-w-2xl">
       <Card>
         <CardHeader>
-          <CardTitle>Quem vai viajar</CardTitle>
+          <CardTitle>
+            {travellers.length === 1 ? 'Quem vai viajar' : `Quem vai viajar · ${travellers.length} passageiros`}
+          </CardTitle>
           <CardDescription>
             O nome precisa ser igual ao do documento apresentado no embarque.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="space-y-6" onSubmit={submit}>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="firstName">Nome</Label>
-                <Input id="firstName" value={passenger.firstName} onChange={updatePassenger('firstName')} />
+            {travellers.map((traveller, index) => (
+              <div key={traveller.identifier} className={cn('space-y-4', index > 0 && 'border-t pt-6')}>
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="text-sm font-medium">{traveller.label}</p>
+                  {traveller.ageGroup === 'infant' && (
+                    <p className="text-xs text-muted-foreground">Viaja no colo, sem assento próprio.</p>
+                  )}
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor={`firstName-${traveller.identifier}`}>Nome</Label>
+                    <Input
+                      id={`firstName-${traveller.identifier}`}
+                      value={traveller.firstName}
+                      onChange={updateTraveller(index, 'firstName')}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor={`lastName-${traveller.identifier}`}>Sobrenome</Label>
+                    <Input
+                      id={`lastName-${traveller.identifier}`}
+                      value={traveller.lastName}
+                      onChange={updateTraveller(index, 'lastName')}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor={`birthdate-${traveller.identifier}`}>Data de nascimento</Label>
+                    <Input
+                      id={`birthdate-${traveller.identifier}`}
+                      type="date"
+                      value={traveller.birthdate}
+                      onChange={updateTraveller(index, 'birthdate')}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor={`document-${traveller.identifier}`}>Documento</Label>
+                    <Input
+                      id={`document-${traveller.identifier}`}
+                      value={traveller.documentNumber}
+                      onChange={updateTraveller(index, 'documentNumber')}
+                      placeholder="Passaporte ou RG"
+                    />
+                  </div>
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="lastName">Sobrenome</Label>
-                <Input id="lastName" value={passenger.lastName} onChange={updatePassenger('lastName')} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="title">Tratamento</Label>
-                <Input id="title" value={passenger.title} onChange={updatePassenger('title')} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="birthdate">Data de nascimento</Label>
-                <Input
-                  id="birthdate"
-                  type="date"
-                  value={passenger.birthdate}
-                  onChange={updatePassenger('birthdate')}
-                />
-              </div>
-              <div className="space-y-1.5 sm:col-span-2">
-                <Label htmlFor="documentNumber">Documento</Label>
-                <Input
-                  id="documentNumber"
-                  value={passenger.documentNumber}
-                  onChange={updatePassenger('documentNumber')}
-                  placeholder="Passaporte ou RG"
-                />
-              </div>
-            </div>
+            ))}
 
             <div className="space-y-4 border-t pt-6">
               <div>

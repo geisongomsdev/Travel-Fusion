@@ -33,6 +33,8 @@ export function SearchStep({ onSearch, running }) {
       { origin: 'SCL', destination: 'LIM', date: '2026-11-24' },
     ],
     adults: 1,
+    children: 0,
+    infants: 0,
     cabin: 'economy',
     provider: 'latam',
   });
@@ -43,7 +45,11 @@ export function SearchStep({ onSearch, running }) {
   const submit = (event) => {
     event.preventDefault();
 
-    const passengers = { adults: Number(form.adults) || 1, children: 0, infants: 0 };
+    const passengers = {
+      adults: Number(form.adults) || 1,
+      children: Number(form.children) || 0,
+      infants: Number(form.infants) || 0,
+    };
     const options = { provider: [form.provider], class: form.cabin };
 
     // Multidestino não tem pontas: vai a lista COMPLETA de trechos, e só ela.
