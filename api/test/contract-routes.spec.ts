@@ -272,6 +272,42 @@ describe('/booking — 06-booking.md', () => {
     expect(booked[0].people[1]).toMatchObject({ id: 'INF_1', ageGroup: 'infant' });
   });
 
+  it('reserva com a composição inteira: 2 adultos e 1 criança chegam ao provedor', async () => {
+    const family = encodeOfferKey({ p: 'fake', r: 'OFFER-1', x: ['ADT_1', 'ADT_2', 'CHD_1'] });
+    const { registry, booked } = fakeProvider();
+    const person = (identifier: string, ageGroup: string, birthdate: string) => ({
+      identifier, firstName: 'Andy', lastName: 'Peterson', ageGroup, birthdate,
+    });
+
+    await new BookingService(registry).execute(body({
+      fares: [{ fareId: family, appliesTo: 'all' }],
+      selectedFareId: family,
+      people: [
+        person('ADT_1', 'adult', '1990-04-21'),
+        person('ADT_2', 'adult', '1992-02-02'),
+        person('CHD_1', 'child', '2018-05-05'),
+      ],
+    }));
+
+    expect(booked[0].people.map((traveller) => `${traveller.id}/${traveller.ageGroup}`))
+      .toEqual(['ADT_1/adult', 'ADT_2/adult', 'CHD_1/child']);
+  });
+
+  it('🔴 reservar com MENOS gente que a oferta tarifou é 400, nomeando quem falta', async () => {
+    const family = encodeOfferKey({ p: 'fake', r: 'OFFER-1', x: ['ADT_1', 'ADT_2', 'CHD_1'] });
+    const { registry, provider } = fakeProvider();
+
+    await expect(new BookingService(registry).execute(body({
+      fares: [{ fareId: family, appliesTo: 'all' }],
+      selectedFareId: family,
+      people: [{ identifier: 'ADT_1', firstName: 'Andy', lastName: 'Peterson', ageGroup: 'adult', birthdate: '1990-04-21' }],
+    }))).rejects.toMatchObject({
+      code: 'SEARCH_VALIDATION_ERROR',
+      details: { errors: { people: [expect.stringContaining('ADT_2, CHD_1')] } },
+    });
+    expect(provider.book).not.toHaveBeenCalled();
+  });
+
   it('🔴 gate de re-tarifa: preço maior que o exibido é 409 e nada é reservado', async () => {
     const { registry, provider } = fakeProvider();
     await expect(new BookingService(registry).execute(body({ displayedTotal: 600 })))

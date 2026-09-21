@@ -260,6 +260,20 @@ export class BookingService {
       });
     });
 
+    /**
+     * 🔴 A viagem inteira tem que vir. A oferta foi tarifada para uma composição
+     * específica, e reservar com menos gente usa um preço que cobre mais: a
+     * companhia recusa a referência que sobra, e quando aceita, aceita pelo
+     * valor errado. Recusar aqui nomeia quem falta; deixar passar vira
+     * `PaxIDKeyRef` na LATAM, ou uma venda barata demais.
+     */
+    const missing = (expected ?? []).filter((paxId) => !seen.has(paxId));
+    if (missing.length > 0) {
+      (errors.people ??= []).push(
+        `Faltam passageiros da oferta: ${missing.join(', ')}. Ela foi tarifada para ${expected!.join(', ')}.`,
+      );
+    }
+
     if (Object.keys(errors).length > 0) throw invalid(errors);
     return travellers;
   }
